@@ -1,0 +1,34 @@
+[package]
+name = "o7-language-server"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+description = "Language server for Oberon-07, with the front end of the o7c compiler"
+repository = "https://github.com/aixp/o7-language-server"
+readme = "README.md"
+keywords = ["oberon", "lsp", "language-server"]
+categories = ["development-tools"]
+
+[dependencies]
+# The front end of the compiler. The dependency is a fixed commit (tag
+# o7-front-v0.2.1); Cargo.lock is committed. The repository is private, so
+# the URL is SSH (see README.md, "Front-end version").
+o7-front = { git = "ssh://git@github.com/aixp/o7c.git", rev = "95b7da90c4d4220e02dd82d8fc901a53c891410c" }
+lsp-server = "0.7.9"
+lsp-types = "=0.95.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+crossbeam-channel = "0.5"
+
+[profile.dev]
+opt-level = 1
+
+# The front end is fast enough in a debug build only with optimisation.
+[profile.dev.package.o7-front]
+opt-level = 3
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

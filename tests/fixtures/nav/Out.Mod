@@ -1,0 +1,4 @@
+MODULE Out;
+  PROCEDURE Int*(x: INTEGER);
+  END Int;
+END Out.

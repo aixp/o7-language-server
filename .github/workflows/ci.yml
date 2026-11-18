@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: SSH key for the compiler repository (private)
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.O7C_SSH_KEY }}
+      # The differential tests compare the server with the front end on all
+      # source files of the compiler repository at the pinned commit.
+      - name: Compiler repository at the commit of Cargo.lock
+        run: |
+          rev=$(sed -n 's/^source = "git+.*#\([0-9a-f]\{40\}\)"$/\1/p' Cargo.lock | head -n 1)
+          git clone --quiet git@github.com:aixp/o7c.git "$RUNNER_TEMP/o7c"
+          git -C "$RUNNER_TEMP/o7c" checkout --quiet "$rev"
+          echo "O7C_REPO=$RUNNER_TEMP/o7c" >> "$GITHUB_ENV"
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+      - name: No LLVM and no C compiler in the dependencies
+        run: |
+          if cargo tree -e normal,build --locked | grep -E 'o7-llvm|[[:space:]]cc v'; then
+            exit 1
+          fi
+      - name: Smoke test of the binary
+        run: cargo build --locked && ci/smoke.sh target/debug/o7-language-server

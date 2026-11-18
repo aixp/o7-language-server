@@ -1,0 +1,4 @@
+# The front end comes from a private repository over SSH. The git command
+# of the system uses the SSH configuration and the agent of the user.
+[net]
+git-fetch-with-cli = true
