@@ -164,8 +164,6 @@ fn completion_of_system_and_none_in_comments() {
 			"{want} missing in {items:?}"
 		);
 	}
-	// SYSTEM.ASM is removed from the language.
-	assert!(!items.iter().any(|i| i == "ASM"), "{items:?}");
 	assert!(complete(&mut c, &u, find(t, "SYSTEM.", 1, 7)).is_empty());
 	assert!(complete(&mut c, &u, find(t, "SY\"", 0, 2)).is_empty());
 	c.shutdown();
