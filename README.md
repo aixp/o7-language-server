@@ -182,7 +182,10 @@ Secrets and variables, Actions).
 To use a new front end, change `rev` and run `cargo update -p o7-front`.
 For daily work on the compiler and the server at the same time, a `[patch]`
 section in a local `.cargo/config.toml` (not committed) can point to the
-working copy of the compiler.
+working copy of the compiler. If the version of the working copy is not the
+locked version, Cargo ignores the patch until `cargo update -p o7-front`
+runs with the patch; that changes `Cargo.lock`, which must then not be
+committed.
 
 ## Development
 
