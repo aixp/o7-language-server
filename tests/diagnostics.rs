@@ -74,6 +74,39 @@ fn errors_of_the_procedures_of_system() {
 }
 
 #[test]
+fn errors_of_cas() {
+	// The front end checks the predeclared procedure CAS without LLVM.
+	let dir = temp_dir("cas");
+	let text = "MODULE M;\n  IMPORT SYSTEM;\n  VAR i: INTEGER; x: REAL; b: BOOLEAN;\nBEGIN\n  \
+		i := CAS(i, 0);\n  x := CAS(x, 0.0, 1.0);\n  \
+		CAS(i, 0, 1);\n  i := CAS(i, 0, TRUE);\n  \
+		i := SYSTEM.CAS(i, 0, 1);\n  \
+		i := CAS(i, i, i + 1); b := CAS(b, FALSE, TRUE)\nEND M.\n";
+	write_files(&dir, &[("M.Mod", text)]);
+	let mut c = Client::start(Setup::default());
+	let u = c.open(&dir.join("M.Mod"));
+	let d = c.sync(&u);
+	let t = texts(&d);
+	assert_eq!(d.len(), 5, "{t:?}");
+	let at = |line: u32, part: &str| {
+		assert!(
+			d.iter()
+				.any(|d| d.range.start.line == line && d.message.contains(part)),
+			"line {line}: {part:?} not in {t:?}"
+		);
+	};
+	at(4, "this function needs 3 parameter(s), not 2");
+	at(5, "the variable of CAS must have the type INTEGER");
+	at(6, "a function cannot be called as a statement");
+	at(
+		7,
+		"a value of type BOOLEAN cannot be assigned to a variable of type INTEGER",
+	);
+	at(8, "`CAS` is not exported by module SYSTEM");
+	c.shutdown();
+}
+
+#[test]
 fn errors_of_one_module() {
 	let dir = temp_dir("one-module");
 	let text = "MODULE M;\n  VAR x: INTEGER;\nBEGIN\n  x := TRUE;\n  y := 1\nEND M.\n";

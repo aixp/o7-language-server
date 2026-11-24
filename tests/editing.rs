@@ -97,7 +97,7 @@ fn completion_in_a_statement() {
 	let (u, p) = open_with(&mut c, "Main.Mod", "  Show(head)", "  k := ");
 	let items = complete(&mut c, &u, p);
 	for want in [
-		"head", "r", "k", "Show", "L", "Out", "INTEGER", "ABS", "WHILE",
+		"head", "r", "k", "Show", "L", "Out", "INTEGER", "ABS", "CAS", "WHILE",
 	] {
 		assert!(
 			items.iter().any(|i| i == want),
@@ -164,6 +164,8 @@ fn completion_of_system_and_none_in_comments() {
 			"{want} missing in {items:?}"
 		);
 	}
+	// `CAS` is a predeclared procedure, not a procedure of SYSTEM.
+	assert!(!items.iter().any(|i| i == "CAS"), "{items:?}");
 	assert!(complete(&mut c, &u, find(t, "SYSTEM.", 1, 7)).is_empty());
 	assert!(complete(&mut c, &u, find(t, "SY\"", 0, 2)).is_empty());
 	c.shutdown();

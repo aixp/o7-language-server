@@ -60,7 +60,7 @@ The client gives the settings in the initialization options, in
 | Key | Meaning |
 | --- | ------- |
 | `searchPaths` | The directories for imported modules, in the order of the search. They have the meaning of the `-I` options of `o7c`. A relative path starts at the first workspace folder. Default: none. |
-| `target` | The target of the compiler. The front end needs some of its properties (pointer size, `SYSTEM.REG` for the stack pointer, `SYSTEM.EXCFRAME`, the procedures of `SYSTEM` that the target has and the special registers of `SYSTEM.SREG` and `SYSTEM.LDSREG`). Default and only value now: `thumbv7em-m4f`. |
+| `target` | The target of the compiler. The front end needs some of its properties (pointer size, `SYSTEM.REG` for the stack pointer, `SYSTEM.EXCFRAME`, the procedures of `SYSTEM` that the target has and the special registers of `SYSTEM.SREG` and `SYSTEM.LDSREG`, the predeclared procedure `CAS`). Default and only value now: `thumbv7em-m4f`. |
 
 The settings object can also be the value of the key `o7-language-server` or
 `o7`. Example for Zed:
