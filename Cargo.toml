@@ -12,9 +12,9 @@ categories = ["development-tools"]
 
 [dependencies]
 # The front end of the compiler. The dependency is a fixed commit (tag
-# o7-front-v0.2.1); Cargo.lock is committed. The repository is private, so
+# o7-front-v0.3.0); Cargo.lock is committed. The repository is private, so
 # the URL is SSH (see README.md, "Front-end version").
-o7-front = { git = "ssh://git@github.com/aixp/o7c.git", rev = "95b7da90c4d4220e02dd82d8fc901a53c891410c" }
+o7-front = { git = "ssh://git@github.com/aixp/o7c.git", rev = "bceefe407cc5474a7384f1e35cc9176840e33354" }
 lsp-server = "0.7.9"
 lsp-types = "=0.95.1"
 serde = { version = "1", features = ["derive"] }

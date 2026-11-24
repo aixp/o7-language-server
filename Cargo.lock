@@ -199,8 +199,8 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "o7-front"
-version = "0.2.1"
-source = "git+ssh://git@github.com/aixp/o7c.git?rev=95b7da90c4d4220e02dd82d8fc901a53c891410c#95b7da90c4d4220e02dd82d8fc901a53c891410c"
+version = "0.3.0"
+source = "git+ssh://git@github.com/aixp/o7c.git?rev=bceefe407cc5474a7384f1e35cc9176840e33354#bceefe407cc5474a7384f1e35cc9176840e33354"
 
 [[package]]
 name = "o7-language-server"
