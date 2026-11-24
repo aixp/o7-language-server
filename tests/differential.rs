@@ -15,8 +15,9 @@
 //! - a message of `project::collect` about a wrong module name is at the
 //!   module name of the file.
 //!
-//! Set `O7C_REPO` to use a compiler repository other than
-//! `../oberon-compiler`.
+//! The test runs for each target of the compiler (`COMPILER_SETS`), with the
+//! search paths of its test library. Set `O7C_REPO` to use a compiler
+//! repository other than `../oberon-compiler`.
 
 mod common;
 
@@ -29,28 +30,20 @@ use o7_front::diag::Pos;
 use o7_front::front::{self, ImportLoader};
 use o7_front::project::{self, FsHost};
 use o7_front::symfile::SymFile;
-use o7_front::target_info::THUMBV7EM_M4F;
+use o7_front::target_info::{TargetProps, target_props};
 use o7_language_server::vfs::{Encoding, LineIndex, normalize};
 use serde_json::json;
 
 type Messages = BTreeMap<PathBuf, Vec<(Pos, String)>>;
 
-const ROOT_DIRS: [&str; 8] = [
-	"tests/exec",
-	"tests/reject",
-	"tests/codegen",
-	"tests/index",
-	"tests/lib",
-	"lib/Micro",
-	"lib/Micro/hsebyp",
-	"examples",
-];
-
 /// The root modules of the test programs in `dir`: each file `dir/X.Mod` and
 /// each file `dir/X/X.Mod` (as the tests of the compiler).
 fn roots(dir: &Path) -> Vec<PathBuf> {
 	let mut list = Vec::new();
-	for e in std::fs::read_dir(dir).unwrap() {
+	let Ok(entries) = std::fs::read_dir(dir) else {
+		return list;
+	};
+	for e in entries {
 		let p = e.unwrap().path();
 		if p.is_dir() {
 			let r = p.join(format!("{}.Mod", p.file_name().unwrap().to_string_lossy()));
@@ -83,7 +76,7 @@ impl ImportLoader for Loader<'_> {
 	}
 }
 
-fn reference(root: &Path, dirs: &[PathBuf]) -> Messages {
+fn reference(root: &Path, dirs: &[PathBuf], target: &TargetProps) -> Messages {
 	let (units, problems) = project::collect(&FsHost, root, dirs);
 	let mut out: Messages = BTreeMap::new();
 	let mut at_problem: HashMap<PathBuf, HashSet<Pos>> = HashMap::new();
@@ -109,7 +102,7 @@ fn reference(root: &Path, dirs: &[PathBuf]) -> Messages {
 			symfiles: &symfiles,
 			analysed: &analysed,
 		};
-		let (module, diags) = front::parse_module(&u.src, &file, &THUMBV7EM_M4F, &mut loader);
+		let (module, diags) = front::parse_module(&u.src, &file, target, &mut loader);
 		let list = out.entry(path.clone()).or_default();
 		for d in diags.list() {
 			if d.msg.starts_with("cannot import module ")
@@ -138,56 +131,67 @@ fn diagnostics_equal_those_of_the_front_end() {
 		eprintln!("skipped: the compiler repository is not available");
 		return;
 	};
-	let search: Vec<PathBuf> = compiler_search_paths(&repo)
-		.iter()
-		.map(PathBuf::from)
-		.collect();
-	let mut c = Client::start(Setup {
-		options: json!({ "searchPaths": compiler_search_paths(&repo) }),
-		debounce: std::time::Duration::ZERO,
-		..Setup::default()
-	});
-	let mut count = 0;
-	let mut files = HashSet::new();
-	let mut messages = 0;
 	let mut failures = Vec::new();
-	for dir in ROOT_DIRS {
-		for root in roots(&repo.join(dir)) {
-			let mut dirs = vec![root.parent().unwrap().to_path_buf()];
-			dirs.extend(search.iter().cloned());
-			let expected = reference(&root, &dirs);
-			let u = c.open(&root);
-			c.sync(&u);
-			for (path, want) in &expected {
-				let text = std::fs::read(path).unwrap_or_default();
-				let li = LineIndex::new(&text);
-				let mut got: Vec<(Pos, String)> = c
-					.last_diags(&uri(path))
-					.iter()
-					.map(|d| {
-						let off = li.lsp_offset(&text, d.range.start, Encoding::Utf16);
-						(li.pos(off), d.message.clone())
-					})
-					.collect();
-				got.sort();
-				if got != *want {
-					failures.push(format!(
-						"root {}, file {}:\n  server:    {got:?}\n  reference: {want:?}",
-						root.display(),
-						path.display()
-					));
+	for set in &COMPILER_SETS {
+		let target = target_props(set.target).expect("a target of the front end");
+		let search: Vec<PathBuf> = set.search_paths(&repo).iter().map(PathBuf::from).collect();
+		let mut c = Client::start(Setup {
+			options: json!({ "searchPaths": set.search_paths(&repo), "target": set.target }),
+			debounce: std::time::Duration::ZERO,
+			..Setup::default()
+		});
+		let mut count = 0;
+		let mut files = HashSet::new();
+		let mut messages = 0;
+		for dir in set.dirs {
+			for root in roots(&repo.join(dir)) {
+				let mut dirs = vec![root.parent().unwrap().to_path_buf()];
+				dirs.extend(search.iter().cloned());
+				let expected = reference(&root, &dirs, target);
+				let u = c.open(&root);
+				c.sync(&u);
+				for (path, want) in &expected {
+					let text = std::fs::read(path).unwrap_or_default();
+					let li = LineIndex::new(&text);
+					let mut got: Vec<(Pos, String)> = c
+						.last_diags(&uri(path))
+						.iter()
+						.map(|d| {
+							let off = li.lsp_offset(&text, d.range.start, Encoding::Utf16);
+							(li.pos(off), d.message.clone())
+						})
+						.collect();
+					got.sort();
+					if got != *want {
+						failures.push(format!(
+							"{}: root {}, file {}:\n  server:    {got:?}\n  reference: {want:?}",
+							set.target,
+							root.display(),
+							path.display()
+						));
+					}
+					files.insert(path.clone());
+					messages += want.len();
 				}
-				files.insert(path.clone());
-				messages += want.len();
+				c.close(&u);
+				count += 1;
 			}
-			c.close(&u);
-			count += 1;
+		}
+		c.shutdown();
+		eprintln!(
+			"{}: {count} roots, {} files, {messages} messages",
+			set.target,
+			files.len()
+		);
+		assert!(
+			count > 100,
+			"{}: the test programs were not found",
+			set.target
+		);
+		if set.dirs.contains(&"tests/reject") {
+			assert!(messages > 50, "the reject tests give messages");
 		}
 	}
-	c.shutdown();
-	eprintln!("{count} roots, {} files, {messages} messages", files.len());
-	assert!(count > 100, "the test programs were not found");
-	assert!(messages > 50, "the reject tests give messages");
 	assert!(
 		failures.is_empty(),
 		"{} differences:\n{}",

@@ -171,6 +171,61 @@ fn completion_of_system_and_none_in_comments() {
 	c.shutdown();
 }
 
+#[test]
+fn completion_depends_on_the_target() {
+	let dir = temp_dir("targets");
+	let t =
+		"MODULE S;\n  IMPORT SYSTEM;\n  VAR a: INTEGER;\nBEGIN\n  a := \n  a := SYSTEM.\nEND S.\n";
+	write_files(&dir, &[("S.Mod", t)]);
+	// (target, names that completion offers, names that it does not offer)
+	let cases: [(&str, &[&str], &[&str]); 3] = [
+		(
+			"rv32imac",
+			&[
+				"INTEGER", "ABS", "CAS", "FENCE", "FENCEI", "SREGSET", "SREGCLR", "WFI", "SREG",
+			],
+			&["REAL", "FLT", "FLOOR", "SQRT", "WFE", "DMB", "DSB", "ISB"],
+		),
+		(
+			"rv32imafc",
+			&[
+				"INTEGER", "REAL", "FLT", "FLOOR", "CAS", "SQRT", "FENCE", "SREGSET",
+			],
+			&["WFE", "DMB"],
+		),
+		(
+			"thumbv7em-m4f",
+			&[
+				"REAL", "FLT", "FLOOR", "CAS", "SQRT", "WFE", "DMB", "DSB", "ISB",
+			],
+			&["FENCE", "FENCEI", "SREGSET", "SREGCLR"],
+		),
+	];
+	for (target, offered, absent) in cases {
+		let mut c = Client::start(Setup {
+			folders: vec![dir.clone()],
+			options: json!({ "target": target }),
+			..Setup::default()
+		});
+		let u = c.open(&dir.join("S.Mod"));
+		let mut items = complete(&mut c, &u, find(t, "a := \n", 0, 5));
+		items.extend(complete(&mut c, &u, find(t, "SYSTEM.\n", 0, 7)));
+		for want in offered {
+			assert!(
+				items.iter().any(|i| i == want),
+				"{target}: {want} missing in {items:?}"
+			);
+		}
+		for no in absent {
+			assert!(
+				!items.iter().any(|i| i == no),
+				"{target}: {no} offered in {items:?}"
+			);
+		}
+		c.shutdown();
+	}
+}
+
 fn rename(
 	c: &mut Client,
 	u: &Url,
@@ -372,53 +427,49 @@ fn one_semantic_token_for_each_identifier() {
 		eprintln!("skipped: the compiler repository is not available");
 		return;
 	};
-	let mut c = Client::start(Setup {
-		options: json!({ "searchPaths": compiler_search_paths(&repo) }),
-		debounce: std::time::Duration::ZERO,
-		..Setup::default()
-	});
-	let mut files = 0;
-	for dir in [
-		"tests/exec",
-		"tests/codegen",
-		"tests/index",
-		"tests/lib",
-		"lib/Micro",
-		"lib/Micro/hsebyp",
-		"examples",
-	] {
-		let mut list: Vec<PathBuf> = std::fs::read_dir(repo.join(dir))
-			.unwrap()
-			.map(|e| e.unwrap().path())
-			.filter(|p| p.extension().is_some_and(|x| x == "Mod"))
-			.collect();
-		list.sort();
-		for p in list {
-			let u = c.open(&p);
-			if !c.sync(&u).is_empty() {
-				c.close(&u);
+	for set in &COMPILER_SETS {
+		let mut c = Client::start(Setup {
+			options: json!({ "searchPaths": set.search_paths(&repo), "target": set.target }),
+			debounce: std::time::Duration::ZERO,
+			..Setup::default()
+		});
+		let mut files = 0;
+		for dir in set.dirs {
+			let Ok(entries) = std::fs::read_dir(repo.join(dir)) else {
 				continue;
-			}
-			let src = std::fs::read(&p).unwrap();
-			let mut idents = Vec::new();
-			let mut d = Diagnostics::new("");
-			let mut lx = Lexer::new(&src);
-			loop {
-				let (t, pos) = lx.next(&mut d);
-				match t {
-					Tok::Eof => break,
-					Tok::Ident(_) => idents.push((pos.line - 1, pos.col - 1)),
-					_ => {}
+			};
+			let mut list: Vec<PathBuf> = entries
+				.map(|e| e.unwrap().path())
+				.filter(|p| p.extension().is_some_and(|x| x == "Mod"))
+				.collect();
+			list.sort();
+			for p in list {
+				let u = c.open(&p);
+				if !c.sync(&u).is_empty() {
+					c.close(&u);
+					continue;
 				}
+				let src = std::fs::read(&p).unwrap();
+				let mut idents = Vec::new();
+				let mut d = Diagnostics::new("");
+				let mut lx = Lexer::new(&src);
+				loop {
+					let (t, pos) = lx.next(&mut d);
+					match t {
+						Tok::Eof => break,
+						Tok::Ident(_) => idents.push((pos.line - 1, pos.col - 1)),
+						_ => {}
+					}
+				}
+				// The files are ASCII: the column in bytes is the UTF-16 column.
+				let toks: Vec<(u32, u32)> = tokens(&mut c, &u).iter().map(|t| (t.0, t.1)).collect();
+				assert_eq!(toks, idents, "{}", p.display());
+				files += 1;
+				c.close(&u);
 			}
-			// The files are ASCII: the column in bytes is the UTF-16 column.
-			let toks: Vec<(u32, u32)> = tokens(&mut c, &u).iter().map(|t| (t.0, t.1)).collect();
-			assert_eq!(toks, idents, "{}", p.display());
-			files += 1;
-			c.close(&u);
 		}
+		eprintln!("{}: {files} files", set.target);
+		assert!(files > 100, "{}: {files} files without errors", set.target);
+		c.shutdown();
 	}
-	eprintln!("{files} files");
-	assert!(files > 100);
-	c.shutdown();
 }

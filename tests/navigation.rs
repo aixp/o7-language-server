@@ -318,10 +318,10 @@ fn references_of_out_include_files_that_are_not_open() {
 	};
 	let mut c = Client::start(Setup {
 		folders: vec![repo.clone()],
-		options: json!({ "searchPaths": ["tests/lib", "lib/Micro", "lib/Micro/hsebyp"] }),
+		options: json!({ "searchPaths": ["tests/lib/stm32f4", "lib/Micro", "lib/Micro/hsebyp"] }),
 		..Setup::default()
 	});
-	let out = repo.join("tests/lib/Out.Mod");
+	let out = repo.join("tests/lib/stm32f4/Out.Mod");
 	let text = std::fs::read_to_string(&out).unwrap();
 	let u = c.open(&out);
 	c.sync(&u);

@@ -37,12 +37,79 @@ pub fn compiler_repo() -> Option<PathBuf> {
 	p.join("lib/Micro/MicroSTM32F4.Mod").is_file().then_some(p)
 }
 
-/// The search paths of the tests of the compiler.
+/// The test programs of the compiler for one target: the target, the search
+/// paths of its test library (as `tests/lib/boards` of the compiler gives them
+/// for one board of the target, then `lib/Micro` and `lib/Micro/hsebyp`, as
+/// the compiler tests add them), and the directories of the programs.
+pub struct CompilerSet {
+	pub target: &'static str,
+	pub search: &'static [&'static str],
+	pub dirs: &'static [&'static str],
+}
+
+impl CompilerSet {
+	/// The search paths as absolute paths in `repo`.
+	pub fn search_paths(&self, repo: &Path) -> Vec<String> {
+		self.search
+			.iter()
+			.map(|d| repo.join(d).display().to_string())
+			.collect()
+	}
+}
+
+/// One set for each target of the compiler. The first one is the ARM target
+/// (the default target of the server). A directory that does not exist is
+/// ignored.
+pub const COMPILER_SETS: [CompilerSet; 3] = [
+	CompilerSet {
+		target: "thumbv7em-m4f",
+		search: &["tests/lib/stm32f4", "lib/Micro", "lib/Micro/hsebyp"],
+		dirs: &[
+			"tests/exec",
+			"tests/exec-armv7m",
+			"tests/reject",
+			"tests/codegen",
+			"tests/index",
+			"tests/lib/stm32f4",
+			"lib/Micro",
+			"lib/Micro/hsebyp",
+			"examples/nucleo-f446re",
+			"tests/board/nucleo-f446re",
+		],
+	},
+	CompilerSet {
+		target: "rv32imac",
+		search: &["tests/lib/esp32h2", "lib/Micro", "lib/Micro/hsebyp"],
+		dirs: &[
+			"tests/exec",
+			"tests/exec-rv32",
+			"tests/lib/esp32h2",
+			"tests/lib/esp32h2-uart",
+			"examples/esp32h2",
+			"tests/board/esp32h2",
+		],
+	},
+	CompilerSet {
+		target: "rv32imafc",
+		search: &[
+			"tests/lib/qemu-virt-rv32imafc",
+			"tests/lib/qemu-virt",
+			"lib/Micro",
+			"lib/Micro/hsebyp",
+		],
+		dirs: &[
+			"tests/exec",
+			"tests/exec-rv32",
+			"tests/lib/qemu-virt-rv32imafc",
+			"tests/lib/qemu-virt",
+			"examples/qemu-virt-rv32imafc",
+		],
+	},
+];
+
+/// The search paths of the ARM test programs of the compiler.
 pub fn compiler_search_paths(repo: &Path) -> Vec<String> {
-	["tests/lib", "lib/Micro", "lib/Micro/hsebyp"]
-		.iter()
-		.map(|d| repo.join(d).display().to_string())
-		.collect()
+	COMPILER_SETS[0].search_paths(repo)
 }
 
 /// A new empty directory for one test.

@@ -60,7 +60,7 @@ The client gives the settings in the initialization options, in
 | Key | Meaning |
 | --- | ------- |
 | `searchPaths` | The directories for imported modules, in the order of the search. They have the meaning of the `-I` options of `o7c`. A relative path starts at the first workspace folder. Default: none. |
-| `target` | The target of the compiler. The front end needs some of its properties (pointer size, `SYSTEM.REG` for the stack pointer, `SYSTEM.EXCFRAME`, the procedures of `SYSTEM` that the target has and the special registers of `SYSTEM.SREG` and `SYSTEM.LDSREG`, the predeclared procedure `CAS`). Default and only value now: `thumbv7em-m4f`. |
+| `target` | The target of the compiler. The front end needs some of its properties (pointer size, `SYSTEM.REG` for the stack pointer, `SYSTEM.EXCFRAME`, the procedures of `SYSTEM` that the target has and the special registers of `SYSTEM.SREG` and `SYSTEM.LDSREG`, the predeclared procedure `CAS`, the type `REAL`). Values: `thumbv7em-m4f` (default), `rv32imac` (no `REAL`, `FLT`, `FLOOR`, `SYSTEM.SQRT`), `rv32imafc`. |
 
 The settings object can also be the value of the key `o7-language-server` or
 `o7`. Example for Zed:
@@ -159,7 +159,7 @@ A change of one of these items is a new major version of the server.
 The server depends on a fixed commit of the compiler repository:
 
 ```toml
-o7-front = { git = "ssh://git@github.com/aixp/o7c.git", rev = "60e3f31cd9cda6c9b9b25b49ca4d7959a36ffe6b" }
+o7-front = { git = "ssh://git@github.com/aixp/o7c.git", rev = "fe5d144204d543fd92ce04177c216e2665910861" }
 ```
 
 `Cargo.lock` is committed, so the build is reproducible. Cargo builds only

@@ -80,7 +80,8 @@ fn cut_texts() {
 		.collect();
 	if let Some(repo) = compiler_repo() {
 		files.push(repo.join("lib/Micro/MicroSTM32F4Ports.Mod"));
-		files.push(repo.join("tests/lib/Out.Mod"));
+		files.push(repo.join("lib/Micro/MicroESP32H2Ports.Mod"));
+		files.push(repo.join("tests/lib/stm32f4/Out.Mod"));
 	}
 	let mut c = Client::start(Setup {
 		folders: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/nav")],
@@ -141,7 +142,7 @@ fn binary_on_standard_input_and_output() {
 	let out = Command::new(exe).arg("--version").output().unwrap();
 	let v = String::from_utf8(out.stdout).unwrap();
 	assert!(
-		v.starts_with("o7-language-server 0.1.0 (o7-front 0.4.0, compiler commit "),
+		v.starts_with("o7-language-server 0.1.0 (o7-front 0.6.0, compiler commit "),
 		"{v}"
 	);
 
