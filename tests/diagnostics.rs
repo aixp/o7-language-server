@@ -45,6 +45,36 @@ fn utf8_positions_if_the_client_offers_them() {
 }
 
 #[test]
+fn errors_of_the_procedures_of_system() {
+	// The front end checks the procedures of SYSTEM without LLVM, so the
+	// server shows the same errors as the compiler.
+	let dir = temp_dir("system-procs");
+	let text = "MODULE M;\n  IMPORT SYSTEM;\n  VAR i: INTEGER; x: REAL;\nBEGIN\n  \
+		SYSTEM.ASM(\"nop\");\n  i := SYSTEM.SREG(18);\n  SYSTEM.LDSREG(20, i);\n  \
+		SYSTEM.LDSREG(i, 1);\n  x := SYSTEM.SQRT(i);\n  \
+		SYSTEM.WFI; i := SYSTEM.SREG(16); SYSTEM.LDSREG(16, 1); x := SYSTEM.SQRT(x)\nEND M.\n";
+	write_files(&dir, &[("M.Mod", text)]);
+	let mut c = Client::start(Setup::default());
+	let u = c.open(&dir.join("M.Mod"));
+	let d = c.sync(&u);
+	let t = texts(&d);
+	assert_eq!(d.len(), 5, "{t:?}");
+	let at = |line: u32, part: &str| {
+		assert!(
+			d.iter()
+				.any(|d| d.range.start.line == line && d.message.contains(part)),
+			"line {line}: {part:?} not in {t:?}"
+		);
+	};
+	at(4, "SYSTEM.ASM is removed");
+	at(5, "special register 18 (BASEPRI_MAX) cannot be read");
+	at(6, "special register 20 (CONTROL) cannot be written");
+	at(7, "SYSTEM.LDSREG needs a constant register number");
+	at(8, "REAL expression expected");
+	c.shutdown();
+}
+
+#[test]
 fn errors_of_one_module() {
 	let dir = temp_dir("one-module");
 	let text = "MODULE M;\n  VAR x: INTEGER;\nBEGIN\n  x := TRUE;\n  y := 1\nEND M.\n";
