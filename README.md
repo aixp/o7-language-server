@@ -159,7 +159,7 @@ A change of one of these items is a new major version of the server.
 The server depends on a fixed commit of the compiler repository:
 
 ```toml
-o7-front = { git = "ssh://git@github.com/aixp/o7c.git", rev = "fe5d144204d543fd92ce04177c216e2665910861" }
+o7-front = { git = "ssh://git@github.com/aixp/o7c.git", rev = "30cfb8d3b8b55ed1de930d2f01bcd558783559c2" }
 ```
 
 `Cargo.lock` is committed, so the build is reproducible. Cargo builds only
