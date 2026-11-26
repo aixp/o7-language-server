@@ -18,7 +18,7 @@ pub fn definition(ws: &Workspace, unit: &Rc<Unit>, p: Position, enc: Encoding) -
 			return None;
 		};
 		let path = unit.dep_path(module)?;
-		if let Some(t) = ws.unit(path)
+		if let Some(t) = ws.unit(unit.target, path)
 			&& let Some(m) = t.analysis.index.module_symbol()
 			&& let Some(span) = symbol(t, m).name_span
 		{

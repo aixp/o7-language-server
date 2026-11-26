@@ -142,7 +142,7 @@ fn binary_on_standard_input_and_output() {
 	let out = Command::new(exe).arg("--version").output().unwrap();
 	let v = String::from_utf8(out.stdout).unwrap();
 	assert!(
-		v.starts_with("o7-language-server 0.1.0 (o7-front 0.7.1, compiler commit "),
+		v.starts_with("o7-language-server 0.2.0 (o7-front 0.8.0, compiler commit "),
 		"{v}"
 	);
 
@@ -157,7 +157,8 @@ fn binary_on_standard_input_and_output() {
 	let mut r = BufReader::new(p.stdout.take().unwrap());
 	write_message(
 		&mut w,
-		&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}}),
+		&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+			"capabilities": {}, "initializationOptions": {"target": TEST_TARGET}}}),
 	);
 	let init = read_message(&mut r);
 	assert_eq!(init["id"], 1);

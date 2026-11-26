@@ -5,15 +5,25 @@
 //! `workspace/configuration`):
 //!
 //! ```json
-//! { "searchPaths": ["lib/Micro", "lib/Micro/hsebyp"], "target": "thumbv7em-m4f" }
+//! { "searchPaths": ["lib", "lib/Micro", "lib/Micro/hsebyp"], "target": "thumbv7em-m4f" }
 //! ```
 //!
 //! The object can also be the value of the key `o7` (the id of the Zed
 //! extension) or `o7-language-server` (the name of the server).
+//!
+//! The target has no default value (as the board of `o7c build`, which has
+//! no default). Without a target the server does not analyse the modules;
+//! each open document has the error [`NO_TARGET`].
+//!
+//! The settings are for a module without a project file. A project file
+//! `o7.toml` (the nearest one upward from the module) gives the board, and
+//! thus the target, and the search directories of each of its programs; the
+//! settings then do not apply to the module (`crate::workspace`).
 
 use std::path::{Path, PathBuf};
 
-use o7_front::target_info::{THUMBV7EM_M4F, TargetProps, target_props};
+use o7_front::project_file::PROJECT_FILE;
+use o7_front::target_info::{TARGETS, TargetProps, target_props};
 use serde_json::Value;
 
 use crate::vfs::normalize;
@@ -21,22 +31,45 @@ use crate::vfs::normalize;
 /// The keys under which the settings can be.
 pub const SECTIONS: [&str; 2] = ["o7-language-server", "o7"];
 
-#[derive(Clone, Debug, PartialEq)]
+/// The start of the message for a missing target.
+pub const NO_TARGET: &str = "no target: set the setting `target`";
+
+/// The message for a missing target, with the names of the known targets.
+pub fn no_target_message() -> String {
+	format!(
+		"{NO_TARGET} to one of: {}; or make a project file {PROJECT_FILE} with the programs and their boards",
+		target_names().join(", ")
+	)
+}
+
+/// The message for a module that is in no program of the project file
+/// `file`, when that file has no default board.
+pub fn no_program_message(file: &Path) -> String {
+	format!(
+		"no target: the module is in no program of {}, and that file has no default board (the key `board` at its top)",
+		file.display()
+	)
+}
+
+/// The message for a module whose project file `file` has errors.
+pub fn project_errors_message(file: &Path) -> String {
+	format!("no target: the project file {} has errors", file.display())
+}
+
+/// The names of the targets of the front end.
+pub fn target_names() -> Vec<&'static str> {
+	TARGETS.iter().map(|t| t.name).collect()
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Config {
 	/// The directories that are searched for imported modules after the
 	/// directory of the root module (the `-I` options of `o7c`). Relative
 	/// paths start at the workspace root.
 	pub search_paths: Vec<String>,
-	pub target: &'static TargetProps,
-}
-
-impl Default for Config {
-	fn default() -> Config {
-		Config {
-			search_paths: Vec::new(),
-			target: &THUMBV7EM_M4F,
-		}
-	}
+	/// The target of the compiler. `None` until the client gives it: there
+	/// is no default.
+	pub target: Option<&'static TargetProps>,
 }
 
 impl Config {
@@ -70,19 +103,13 @@ impl Config {
 		if let Some(v) = obj.get("target") {
 			match v.as_str() {
 				Some(name) => match target_props(name) {
-					Some(t) => self.target = t,
-					None => {
-						let known: Vec<&str> = o7_front::target_info::TARGETS
-							.iter()
-							.map(|t| t.name)
-							.collect();
-						problems.push(format!(
-							"o7-language-server: unknown target {name}; known targets: {}",
-							known.join(", ")
-						));
-					}
+					Some(t) => self.target = Some(t),
+					None => problems.push(format!(
+						"o7-language-server: unknown target {name}; known targets: {}",
+						target_names().join(", ")
+					)),
 				},
-				None if v.is_null() => self.target = &THUMBV7EM_M4F,
+				None if v.is_null() => self.target = None,
 				None => problems.push("o7-language-server: target must be a string".to_string()),
 			}
 		}
@@ -129,6 +156,7 @@ mod tests {
 	#[test]
 	fn read_settings() {
 		let mut c = Config::default();
+		assert_eq!(c.target, None, "no default target");
 		assert!(
 			c.update(&json!({"searchPaths": ["lib", "/abs/x/../y"]}))
 				.is_empty()
@@ -146,7 +174,10 @@ mod tests {
 		assert_eq!(c.search_paths, ["lib", "/abs/x/../y"]);
 		let p = c.update(&json!({"target": "z80", "searchPaths": 3}));
 		assert_eq!(p.len(), 2, "{p:?}");
-		assert_eq!(c.target.name, "thumbv7em-m4f");
+		assert_eq!(c.target.map(|t| t.name), Some("thumbv7em-m4f"));
 		assert!(c.update(&Value::Null).is_empty());
+		// null removes the target.
+		assert!(c.update(&json!({"target": null})).is_empty());
+		assert_eq!(c.target, None);
 	}
 }

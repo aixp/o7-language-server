@@ -21,6 +21,7 @@ use std::rc::Rc;
 use lsp_types::{Location, Position, Range};
 use o7_front::diag::{Pos, Span};
 use o7_front::index::{Extern, Origin, Reference, Role, SymId, SymKind, Symbol};
+use o7_front::target_info::TargetProps;
 
 use crate::vfs::{Encoding, path_to_uri};
 use crate::workspace::{Unit, Workspace};
@@ -58,12 +59,13 @@ pub fn declaration(ws: &Workspace, unit: &Rc<Unit>, sym: SymId) -> Option<(Rc<Un
 		Origin::Predeclared => None,
 		Origin::Imported { module, item } => {
 			let path = unit.dep_path(module)?;
-			extern_declaration(ws, path, item)
+			extern_declaration(ws, unit.target, path, item)
 		}
 	}
 }
 
-/// The declaration of the object `item` of the module in the file `path`.
+/// The declaration of the object `item` of the module in the file `path`,
+/// in the analyses for `target`.
 ///
 /// The last analysis of the file has priority. If the file has errors now,
 /// the object can be absent from it; then the analysis of the last
@@ -71,11 +73,12 @@ pub fn declaration(ws: &Workspace, unit: &Rc<Unit>, sym: SymId) -> Option<(Rc<Un
 /// the symbol file, thus through the snapshot.
 pub fn extern_declaration(
 	ws: &Workspace,
+	target: &TargetProps,
 	path: &std::path::Path,
 	item: &Extern,
 ) -> Option<(Rc<Unit>, SymId)> {
-	let latest = ws.unit(path);
-	let snap = ws.snapshot(path);
+	let latest = ws.unit(target, path);
+	let snap = ws.snapshot(target, path);
 	match item {
 		Extern::Object(name) => {
 			if let Some(u) = latest
@@ -161,6 +164,11 @@ impl Exported {
 /// file, and, for an exported object, in each analysed file that imports
 /// the module. Call [`Workspace::refresh_index`] before, so that the
 /// analyses of all files are up to date.
+///
+/// The importers are those of all targets: a module of programs for
+/// different targets is analysed one time for each target, and each of
+/// these analyses gives the same references. The result can thus contain
+/// one place more than one time.
 pub fn find_refs(ws: &Workspace, du: &Rc<Unit>, decl: SymId) -> Vec<(Rc<Unit>, Reference)> {
 	let ix = &du.analysis.index;
 	let mut out: Vec<(Rc<Unit>, Reference)> = ix.refs_of(decl).map(|r| (du.clone(), *r)).collect();
@@ -168,8 +176,10 @@ pub fn find_refs(ws: &Workspace, du: &Rc<Unit>, decl: SymId) -> Vec<(Rc<Unit>, R
 	let exported = match s.kind {
 		SymKind::Module => Some(Exported::Module),
 		SymKind::Field if s.exported => {
-			let fresh = ws.unit(&du.path).is_some_and(|l| Rc::ptr_eq(l, du));
-			match (ws.snapshot(&du.path), s.record) {
+			let fresh = ws
+				.unit(du.target, &du.path)
+				.is_some_and(|l| Rc::ptr_eq(l, du));
+			match (ws.snapshot(du.target, &du.path), s.record) {
 				(Some(snap), Some(record)) if fresh && Rc::ptr_eq(&snap.unit, du) => {
 					let idx: Vec<u32> = snap
 						.type_map
@@ -197,7 +207,7 @@ pub fn find_refs(ws: &Workspace, du: &Rc<Unit>, decl: SymId) -> Vec<(Rc<Unit>, R
 		.units()
 		.filter(|u| u.path != du.path && u.dep_path(&du.name) == Some(du.path.as_path()))
 		.collect();
-	importers.sort_by(|a, b| a.path.cmp(&b.path));
+	importers.sort_by(|a, b| (&a.path, a.target.name).cmp(&(&b.path, b.target.name)));
 	for u in importers {
 		let uix = &u.analysis.index;
 		for (i, t) in uix.symbols().iter().enumerate() {

@@ -46,7 +46,7 @@ pub fn completion(
 	if j > 0 && src[j - 1] == b'.' && !(j > 1 && src[j - 2] == b'.') {
 		return members(ws, unit, j - 1);
 	}
-	scope_items(ws, unit, unit.lines.pos(start))
+	scope_items(unit, unit.lines.pos(start))
 }
 
 /// The cursor at `off` is inside a comment or a string: no completion.
@@ -122,7 +122,8 @@ fn members(ws: &Workspace, unit: &Rc<Unit>, dot: usize) -> Vec<CompletionItem> {
 fn module_members(ws: &Workspace, unit: &Rc<Unit>, sym: SymId) -> Vec<CompletionItem> {
 	let s = unit.analysis.index.symbol(sym);
 	match &s.origin {
-		Origin::Predeclared => predeclared_names(ws.config.target as &dyn TargetInfo)
+		// The procedures of SYSTEM that the target of this analysis has.
+		Origin::Predeclared => predeclared_names(unit.target as &dyn TargetInfo)
 			.system
 			.into_iter()
 			.map(|(name, k)| predeclared_item(name, k, "SYSTEM"))
@@ -133,7 +134,9 @@ fn module_members(ws: &Workspace, unit: &Rc<Unit>, sym: SymId) -> Vec<Completion
 			};
 			// The interface that the importer sees: the last snapshot; else
 			// the last analysis.
-			let Some(t) = ws.snapshot(path).map(|s| &s.unit).or(ws.unit(path)) else {
+			let target = unit.target;
+			let latest = ws.unit(target, path);
+			let Some(t) = ws.snapshot(target, path).map(|s| &s.unit).or(latest) else {
 				return Vec::new();
 			};
 			let tix = &t.analysis.index;
@@ -145,7 +148,7 @@ fn module_members(ws: &Workspace, unit: &Rc<Unit>, sym: SymId) -> Vec<Completion
 	}
 }
 
-fn scope_items(ws: &Workspace, unit: &Rc<Unit>, pos: Pos) -> Vec<CompletionItem> {
+fn scope_items(unit: &Rc<Unit>, pos: Pos) -> Vec<CompletionItem> {
 	let ix = &unit.analysis.index;
 	let m = &unit.analysis.module;
 	let level = ix.level_at(pos);
@@ -158,7 +161,7 @@ fn scope_items(ws: &Workspace, unit: &Rc<Unit>, pos: Pos) -> Vec<CompletionItem>
 		}
 		out.push(item(ix, m, id, "0"));
 	}
-	for (name, k) in predeclared_names(ws.config.target as &dyn TargetInfo).universe {
+	for (name, k) in predeclared_names(unit.target as &dyn TargetInfo).universe {
 		if !out.iter().any(|i| i.label == name) {
 			out.push(predeclared_item(name, k, ""));
 		}

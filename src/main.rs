@@ -11,10 +11,16 @@ Usage: o7-language-server [--stdio]
 Language server for Oberon-07. It reads and writes the Language Server
 Protocol on the standard input and output.
 
-Settings (initialization options or workspace configuration):
+A project file o7.toml (the nearest one upward from a module; see the
+README of o7c) gives the programs of a project, each with its board and its
+search directories. The server uses it for the target of each module.
+
+Settings for modules without a project file (initialization options or
+workspace configuration):
   searchPaths   directories for imported modules (the -I options of o7c);
                 relative paths start at the workspace root
-  target        the target of the compiler (default: thumbv7em-m4f)";
+  target        the target of the compiler (required, there is no default):
+                thumbv7em-m4f, rv32imac or rv32imafc";
 
 fn main() -> ExitCode {
 	for arg in std::env::args().skip(1) {

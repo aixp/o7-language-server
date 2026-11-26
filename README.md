@@ -9,7 +9,8 @@ semantic index of the front end. The server does not need LLVM.
 
 | Feature | Notes |
 | ------- | ----- |
-| Diagnostics | For the open documents and the files that they import. The range is the symbol at the position of the message. All messages are errors (the compiler has no warnings). |
+| Diagnostics | For the open documents and the files that they import, and for the project file `o7.toml`. The range is the symbol at the position of the message. All messages are errors (the compiler has no warnings). |
+| Programs for different targets | A project file `o7.toml` gives the board of each program. Each module gets the predeclared names and the procedures of `SYSTEM` of the target of its program. A module of programs for different targets shows the errors of each target. |
 | Go to Definition | Also for imported objects, fields of imported records and import names (they go to the module). |
 | Hover | The declaration (`PROCEDURE Add*(VAR list: Node; value: INTEGER): INTEGER`, `CONST Max* = 10`). For an imported procedure the parameter names come from the exporting module. On an expression: its type. |
 | Document Symbols | Module, constants, types with their fields, variables, procedures (nested). |
@@ -47,41 +48,99 @@ o7-language-server --version  # server version, o7-front version, compiler commi
 
 The answer to `initialize` has the same version text in `serverInfo`.
 
+## The project file `o7.toml`
+
+The target of a module (and thus the procedures of `SYSTEM` and the
+predeclared names that it can use) and its search directories come from the
+project file of `o7c`, if there is one. The README of `o7c` describes the
+file. Example:
+
+```toml
+search = ["lib", "lib/Micro"]
+
+[[program]]
+name = "demo-f446re"
+root = "examples/nucleo-f446re/Demo.Mod"
+board = "nucleo-f446re"
+search = ["lib", "lib/Micro", "lib/Micro/hsebyp"]
+
+[[program]]
+name = "demo-h2"
+root = "examples/esp32h2/Demo.Mod"
+board = "esp32h2"
+```
+
+The server uses the functions of the compiler (`o7_front::project_file`), so
+it gives each module the board and the search list that `o7c build` gives
+it:
+
+- The project file of a module is the file `o7.toml` in the nearest
+  directory upward from the module. The workspace folder is not important.
+- The programs of a module are the programs that have it as root module. If
+  there are none: the programs that import it. For each of these programs
+  the server analyses the module with the target of the board and the search
+  list of the program.
+- A module of programs for different targets has the diagnostics of each
+  target. A message that not all its programs give has the names of the
+  programs at its end: `the type REAL is not available on this target
+  (program demo-h2, board esp32h2)`. Completion, hover, Go to Definition and
+  the semantic tokens use the first of its programs in the file.
+- A module that is in no program is a root module with the defaults of the
+  file (the keys `board` and `search` at the top). Without a default board
+  the module is not analysed, and it has the error "no target: the module is
+  in no program of ...".
+- If a module has a project file, the settings `target` and `searchPaths` do
+  not apply to it: an editor setting cannot make the server differ from the
+  compiler.
+- The errors of the project file are diagnostics of that file. While the
+  file has errors, its modules are not analysed, and each open module has
+  the error "no target: the project file ... has errors".
+- The server reads the project file from the disk. Save the file to apply a
+  change. The server registers a file watcher for `**/o7.toml` if the client
+  permits it; a client without watchers must send
+  `workspace/didChangeWatchedFiles` for the file.
+
 ## Settings
+
+The settings are for modules without a project file.
 
 The client gives the settings in the initialization options, in
 `workspace/didChangeConfiguration`, or as the answer to
 `workspace/configuration` (section `o7-language-server` or `o7`):
 
 ```json
-{ "searchPaths": ["lib/Micro", "lib/Micro/hsebyp", "tests/lib"], "target": "thumbv7em-m4f" }
+{ "searchPaths": ["lib", "lib/Micro", "lib/Micro/hsebyp", "tests/lib/stm32f4"], "target": "thumbv7em-m4f" }
 ```
 
 | Key | Meaning |
 | --- | ------- |
 | `searchPaths` | The directories for imported modules, in the order of the search. They have the meaning of the `-I` options of `o7c`. A relative path starts at the first workspace folder. Default: none. |
-| `target` | The target of the compiler. The front end needs some of its properties (pointer size, `SYSTEM.REG` for the stack pointer, `SYSTEM.EXCFRAME`, the procedures of `SYSTEM` that the target has and the special registers of `SYSTEM.SREG` and `SYSTEM.LDSREG`, the predeclared procedure `CAS`, the type `REAL`). Values: `thumbv7em-m4f` (default), `rv32imac` (no `REAL`, `FLT`, `FLOOR`, `SYSTEM.SQRT`), `rv32imafc`. |
+| `target` | The target of the compiler. The front end needs some of its properties (pointer size, `SYSTEM.REG` for the stack pointer, `SYSTEM.EXCFRAME`, the procedures of `SYSTEM` that the target has and the special registers of `SYSTEM.SREG` and `SYSTEM.LDSREG`, the predeclared procedure `CAS`, the type `REAL`). Values: `thumbv7em-m4f`, `rv32imac` (no `REAL`, `FLT`, `FLOOR`, `SYSTEM.SQRT`), `rv32imafc`. Required: there is no default (as `o7c build`, which requires `--board`). Without a target the server does not analyse the modules, and each open document has the error "no target: set the setting `target` to one of: ...". The value `null` removes the target. |
 
 The settings object can also be the value of the key `o7-language-server` or
 `o7`. Example for Zed:
 
 ```json
 { "lsp": { "o7-language-server": {
-    "initialization_options": { "searchPaths": ["lib/Micro", "lib/Micro/hsebyp"] } } } }
+    "initialization_options": {
+      "searchPaths": ["lib", "lib/Micro", "lib/Micro/hsebyp"],
+      "target": "thumbv7em-m4f" } } } }
 ```
 
 ## How the server finds and analyses modules
 
-- Each open document is a root module. Its search list is its own
-  directory, then `searchPaths`. This is the rule of `o7c` for the root
-  module: the source text of module `M` is the file `M.Mod` in the first
-  directory of the list that has it.
+- Without a project file, each open document is a root module. Its search
+  list is its own directory, then `searchPaths`. This is the rule of `o7c`
+  for the root module: the source text of module `M` is the file `M.Mod` in
+  the first directory of the list that has it. With a project file, the
+  search list is that of the program (see "The project file `o7.toml`").
 - The server uses the functions of the compiler (`project::collect`) for the
   search. Thus the messages "cannot find the source file", "circular import"
   and "the file contains module X" are the messages of the compiler.
-- Results are stored for each file path, not for each module name. If two
-  roots in different directories see different files for one module name
-  (for example board variants), each root uses its own file.
+- Results are stored for each target and each file path, not for each
+  module name. If two roots in different directories see different files
+  for one module name (for example board variants), each root uses its own
+  file. A module of programs for two targets has two analyses.
 - The text of an open document has priority over the file on the disk. A
   change in an open document has an effect on its importers before it is
   saved.
@@ -122,6 +181,14 @@ The settings object can also be the value of the key `o7-language-server` or
 - The parameter names of a procedure type and a type that `POINTER TO T`
   names before its declaration are not in the completion list.
 - A module cannot be renamed (the file name would have to change too).
+- Rename is not available in a module that is in programs for different
+  targets (and for a name that such a module uses): the check of the new
+  texts is for one target.
+- Find References in a module of programs for different targets uses the
+  first program to find the declaration.
+- The files of a search directory of a project file that is not in a
+  workspace folder are analysed only when a module of the workspace
+  imports them.
 - Find References and Rename of an exported field need the declaring module
   without errors.
 - Semantic tokens: only the request for the full document.
@@ -151,15 +218,27 @@ The Zed extension depends on these items only:
 4. The server starts without arguments and uses the standard input and
    output.
 5. The setting names `searchPaths` and `target`.
+6. The project file `o7.toml`. Its format is that of `o7c`
+   (`o7_front::project_file`); the server adds no keys. An editor extension
+   needs no setting for a workspace with a project file.
 
 A change of one of these items is a new major version of the server.
+
+The request `o7/status` (no parameters) gives the state of the server for
+tests and for a client that shows the target of a document: the counters
+`analyses`, `indexFiles`, `indexPending`; `settings`; `projectFiles` (path,
+number of errors, programs with name, root, board and target); `documents`
+(for each open document its project file and its contexts: `source` is
+`program`, `default` or `settings`, with `program`, `board` and `target`;
+or the `problem` if the document has no target). New keys can be added in a
+minor version.
 
 ## Front-end version
 
 The server depends on a fixed commit of the compiler repository:
 
 ```toml
-o7-front = { git = "ssh://git@github.com/aixp/o7c.git", rev = "3b041fc3e1e3cfc0c6bd44b258be9637723c6682" }
+o7-front = { git = "ssh://git@github.com/aixp/o7c.git", rev = "9b760ac3abd4a91e934d567e806bb3382a935ccc" }
 ```
 
 `Cargo.lock` is committed, so the build is reproducible. Cargo builds only
@@ -198,7 +277,7 @@ The tests run the server in the same process on a connection in memory:
 | File | Tests |
 | ---- | ----- |
 | `tests/diagnostics.rs` | Initialization, diagnostics of one module, small edits against the final text, CRLF and UTF-8 positions, byte order mark, speed (MicroSTM32F4.Mod: less than 10 ms after the pause). |
-| `tests/multi_module.rs` | Interface change in an open buffer, no analysis of importers after a body change (counter), missing import, circular import, wrong module name, module with errors, stale interface, changed search paths. |
+| `tests/multi_module.rs` | Interface change in an open buffer, no analysis of importers after a body change (counter), missing import, circular import, wrong module name, module with errors, stale interface, changed search paths, no target. |
 | `tests/differential.rs` | For each module of the compiler repository: the diagnostics of the server are equal to those of `front::parse_module`. |
 | `tests/navigation.rs` | Definition, hover, document symbols, references (also of `tests/lib/Out.Mod` in files that are not open), workspace symbols. |
 | `tests/editing.rs` | Completion, rename (with the refusals), semantic tokens (one token for each identifier of each correct file of the compiler repository). |
@@ -206,7 +285,8 @@ The tests run the server in the same process on a connection in memory:
 
 Some tests need the compiler repository. They look for it in the sibling
 directory `../oberon-compiler`, or in the directory that `O7C_REPO` gives.
-Without it they print "skipped" and pass.
+Without it they print "skipped" and pass. The test client gives the target
+`thumbv7em-m4f` if the test does not give a target.
 
 The request `o7/status` returns counters of the analysis (`analyses`,
 `indexFiles`, `indexPending`). The tests use it.

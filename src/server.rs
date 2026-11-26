@@ -12,7 +12,7 @@
 //! timer: it analyses the current text at once. When no message is waiting,
 //! the server analyses the files of the workspace index, one file at a time.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
@@ -60,16 +60,26 @@ use crate::features::{
 	completion, definition, hover, references, rename, semantic_tokens, symbols,
 };
 use crate::vfs::{Document, Encoding, path_to_uri, uri_to_path};
-use crate::workspace::{Unit, Workspace};
+use crate::workspace::{Context, Source, Unit, Workspace, is_project_file};
 
 pub type BoxError = Box<dyn Error + Send + Sync>;
 
 /// The stack of the analysis thread (as the compiler driver).
 const STACK_SIZE: usize = 512 << 20;
 
-/// A request of the server for the state of the analyses (for tests and for
-/// the diagnosis of problems). The result is an object with the counters
-/// `analyses`, `indexFiles` and `indexPending`.
+/// A request of the server for the state of the analyses (for tests, for
+/// the diagnosis of problems, and for a client that shows the target of a
+/// document). The result is an object with:
+///
+/// - the counters `analyses`, `indexFiles` and `indexPending`;
+/// - `settings`: the settings `target` and `searchPaths`;
+/// - `projectFiles`: the project files of the open documents, each with its
+///   `path`, the number of its `errors` and its `programs` (`name`, `root`,
+///   `board`, `target`);
+/// - `documents`: the open documents, each with its `path`, its
+///   `projectFile`, its `contexts` (`source`: `program`, `default` or
+///   `settings`; `program`, `board`, `target`; the first one is the primary
+///   context) and the `problem` if it has no context.
 pub const STATUS_REQUEST: &str = "o7/status";
 
 #[derive(Clone, Debug)]
@@ -252,10 +262,12 @@ impl<'a> Server<'a> {
 					method: DidChangeWatchedFiles::METHOD.to_string(),
 					register_options: serde_json::to_value(
 						DidChangeWatchedFilesRegistrationOptions {
-							watchers: vec![FileSystemWatcher {
-								glob_pattern: GlobPattern::String("**/*.Mod".to_string()),
-								kind: None,
-							}],
+							watchers: ["**/*.Mod", "**/o7.toml"]
+								.map(|glob| FileSystemWatcher {
+									glob_pattern: GlobPattern::String(glob.to_string()),
+									kind: None,
+								})
+								.to_vec(),
 						},
 					)
 					.ok(),
@@ -548,14 +560,86 @@ impl<'a> Server<'a> {
 		self.send(resp.into());
 	}
 
-	/// The current analysis of the document `uri`.
+	/// The current analysis of the document `uri` in its primary context.
+	/// Without a target the request fails with the message "no target".
 	fn unit(&mut self, uri: &Url) -> Result<Rc<Unit>, ResponseError> {
 		let path = file_path(uri).map_err(invalid_params)?;
-		self.ws.check_root(&path);
-		self.ws
-			.unit(&path)
-			.cloned()
-			.ok_or_else(|| failed(format!("{} cannot be analysed", path.display())))
+		let contexts = self.ws.contexts_of(&path).map_err(failed)?;
+		let cannot = || failed(format!("{} cannot be analysed", path.display()));
+		let ctx = contexts.first().ok_or_else(cannot)?;
+		self.ws.check_root(ctx, &path);
+		self.ws.unit(ctx.target, &path).cloned().ok_or_else(cannot)
+	}
+
+	/// The result of the request `o7/status`.
+	fn status(&self) -> Value {
+		let text = |p: &std::path::Path| p.display().to_string();
+		let context = |c: &Context| {
+			let (source, program, board) = match &c.source {
+				Source::Program { name, board } => ("program", Some(name.as_str()), Some(*board)),
+				Source::Default { board } => ("default", None, Some(*board)),
+				Source::Settings => ("settings", None, None),
+			};
+			json!({
+				"source": source,
+				"program": program,
+				"board": board,
+				"target": c.target.name,
+			})
+		};
+		let mut project_files = BTreeSet::new();
+		let mut documents = Vec::new();
+		let paths: BTreeSet<&PathBuf> = self.ws.docs.keys().collect();
+		for path in paths.into_iter().filter(|p| !is_project_file(p)) {
+			let file = self.ws.project_file_of(path);
+			let (contexts, problem) = match self.ws.contexts_of(path) {
+				Ok(list) => (list.iter().map(context).collect(), None),
+				Err(msg) => (Vec::new(), Some(msg)),
+			};
+			documents.push(json!({
+				"path": text(path),
+				"projectFile": file.as_deref().map(text),
+				"contexts": contexts,
+				"problem": problem,
+			}));
+			project_files.extend(file);
+		}
+		let project_files: Vec<Value> = project_files
+			.iter()
+			.map(|file| {
+				let (errors, programs) = match self.ws.project(file) {
+					Some(Ok(project)) => (
+						0,
+						project
+							.programs
+							.iter()
+							.map(|p| {
+								json!({
+									"name": p.name,
+									"root": text(&p.root),
+									"board": p.context.board,
+									"target": p.context.target.name,
+								})
+							})
+							.collect(),
+					),
+					Some(Err(list)) => (list.len(), Vec::new()),
+					None => (1, Vec::new()),
+				};
+				json!({ "path": text(file), "errors": errors, "programs": programs })
+			})
+			.collect();
+		json!({
+			"analyses": self.ws.analyses,
+			"indexFiles": self.ws.index_files().len(),
+			"indexPending": self.ws.index_pending(),
+			"settings": {
+				"target": self.ws.config.target.map(|t| t.name),
+				"searchPaths": self.ws.config.search_paths,
+			},
+			"projectFiles": project_files,
+			"documents": documents,
+		})
 	}
 
 	/// The current analysis of the document `uri`, after the analysis of
@@ -655,11 +739,7 @@ impl<'a> Server<'a> {
 					&unit, enc,
 				))))
 			}
-			STATUS_REQUEST => Ok(json!({
-				"analyses": self.ws.analyses,
-				"indexFiles": self.ws.index_files().len(),
-				"indexPending": self.ws.index_pending(),
-			})),
+			STATUS_REQUEST => Ok(self.status()),
 			_ => Err(ResponseError {
 				code: ErrorCode::MethodNotFound as i32,
 				message: format!("unknown request {}", req.method),

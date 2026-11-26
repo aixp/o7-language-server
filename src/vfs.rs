@@ -13,7 +13,7 @@
 //! [`LineIndex`] converts between them. All conversions go through byte
 //! offsets, so the two line rules can be different.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use lsp_types::{Position, Range, TextDocumentContentChangeEvent, Url};
 use o7_front::diag::{Pos, Span};
@@ -260,20 +260,11 @@ pub fn path_to_uri(path: &Path) -> Option<Url> {
 
 /// Removes `.` and `..` components from a path, without access to the file
 /// system (symbolic links are kept as the user sees them).
+///
+/// This is the function of the front end, so that the paths of the
+/// workspace and the paths of a project file have the same form.
 pub fn normalize(path: &Path) -> PathBuf {
-	let mut out = PathBuf::new();
-	for c in path.components() {
-		match c {
-			Component::CurDir => {}
-			Component::ParentDir => {
-				if !out.pop() {
-					out.push("..");
-				}
-			}
-			c => out.push(c.as_os_str()),
-		}
-	}
-	out
+	o7_front::project_file::normalize(path)
 }
 
 #[cfg(test)]

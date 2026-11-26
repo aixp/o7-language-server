@@ -169,7 +169,9 @@ pub fn matches(query: &str, name: &str) -> bool {
 #[allow(deprecated)]
 pub fn workspace_symbols(ws: &Workspace, query: &str, enc: Encoding) -> Vec<SymbolInformation> {
 	let mut units: Vec<&Rc<Unit>> = ws.units().collect();
-	units.sort_by(|a, b| a.path.cmp(&b.path));
+	units.sort_by(|a, b| (&a.path, a.target.name).cmp(&(&b.path, b.target.name)));
+	// A file that is analysed for more than one target: one time.
+	units.dedup_by(|a, b| a.path == b.path);
 	let mut out = Vec::new();
 	for u in units {
 		let ix = &u.analysis.index;

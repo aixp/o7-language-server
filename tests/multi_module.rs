@@ -294,3 +294,38 @@ fn disk_change_without_notification() {
 	);
 	c.shutdown();
 }
+
+#[test]
+fn no_target_gives_an_error_and_no_analysis() {
+	// The target has no default value: without it the server does not
+	// analyse the modules, and each open document has one error.
+	let dir = temp_dir("no-target");
+	write_files(&dir, &[("A.Mod", A), ("B.Mod", B)]);
+	let mut c = Client::start(Setup {
+		options: json!({ "target": null }),
+		..Setup::default()
+	});
+	let ub = c.open(&dir.join("B.Mod"));
+	let no_target = "0:0: no target: set the setting `target` to one of: \
+		thumbv7em-m4f, rv32imac, rv32imafc; or make a project file o7.toml with the \
+		programs and their boards";
+	assert_eq!(texts(&c.sync(&ub)), [no_target]);
+	assert_eq!(c.analyses(), 0);
+	// A request fails with the same message.
+	let e = c
+		.try_request::<lsp_types::request::HoverRequest>(lsp_types::HoverParams {
+			text_document_position_params: pos_params(&ub, find(B, "A.P", 0, 2)),
+			work_done_progress_params: Default::default(),
+		})
+		.expect_err("no target");
+	assert!(e.message.starts_with("no target: "), "{}", e.message);
+	// The target arrives: the analysis starts.
+	c.configure(json!({ "target": "rv32imac" }));
+	c.wait_diags(&ub, |d| d.is_empty());
+	assert!(c.analyses() > 0);
+	// null removes the target again.
+	c.configure(json!({ "target": null }));
+	let d = c.wait_diags(&ub, |d| !d.is_empty());
+	assert_eq!(texts(&d), [no_target]);
+	c.shutdown();
+}

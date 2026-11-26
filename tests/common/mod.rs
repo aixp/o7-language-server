@@ -39,8 +39,8 @@ pub fn compiler_repo() -> Option<PathBuf> {
 
 /// The test programs of the compiler for one target: the target, the search
 /// paths of its test library (as `tests/lib/boards` of the compiler gives them
-/// for one board of the target, then `lib/Micro` and `lib/Micro/hsebyp`, as
-/// the compiler tests add them), and the directories of the programs.
+/// for one board of the target, then `lib`, `lib/Micro` and `lib/Micro/hsebyp`,
+/// as the compiler tests add them), and the directories of the programs.
 pub struct CompilerSet {
 	pub target: &'static str,
 	pub search: &'static [&'static str],
@@ -58,12 +58,11 @@ impl CompilerSet {
 }
 
 /// One set for each target of the compiler. The first one is the ARM target
-/// (the default target of the server). A directory that does not exist is
-/// ignored.
+/// ([`TEST_TARGET`]). A directory that does not exist is ignored.
 pub const COMPILER_SETS: [CompilerSet; 3] = [
 	CompilerSet {
 		target: "thumbv7em-m4f",
-		search: &["tests/lib/stm32f4", "lib/Micro", "lib/Micro/hsebyp"],
+		search: &["tests/lib/stm32f4", "lib", "lib/Micro", "lib/Micro/hsebyp"],
 		dirs: &[
 			"tests/exec",
 			"tests/exec-armv7m",
@@ -71,6 +70,7 @@ pub const COMPILER_SETS: [CompilerSet; 3] = [
 			"tests/codegen",
 			"tests/index",
 			"tests/lib/stm32f4",
+			"lib",
 			"lib/Micro",
 			"lib/Micro/hsebyp",
 			"examples/nucleo-f446re",
@@ -79,7 +79,7 @@ pub const COMPILER_SETS: [CompilerSet; 3] = [
 	},
 	CompilerSet {
 		target: "rv32imac",
-		search: &["tests/lib/esp32h2", "lib/Micro", "lib/Micro/hsebyp"],
+		search: &["tests/lib/esp32h2", "lib", "lib/Micro", "lib/Micro/hsebyp"],
 		dirs: &[
 			"tests/exec",
 			"tests/exec-rv32",
@@ -94,6 +94,7 @@ pub const COMPILER_SETS: [CompilerSet; 3] = [
 		search: &[
 			"tests/lib/qemu-virt-rv32imafc",
 			"tests/lib/qemu-virt",
+			"lib",
 			"lib/Micro",
 			"lib/Micro/hsebyp",
 		],
@@ -158,8 +159,32 @@ pub fn pos_params(uri: &Url, p: Position) -> TextDocumentPositionParams {
 	TextDocumentPositionParams::new(TextDocumentIdentifier::new(uri.clone()), p)
 }
 
+/// The target that the client gives if the initialization options of the
+/// test do not give one. The server has no default target.
+pub const TEST_TARGET: &str = "thumbv7em-m4f";
+
+/// The initialization options with the key `target` added if they do not
+/// have it (also not in a section). Thus a test without a target gives
+/// `{"target": null}`.
+fn with_target(options: &Value) -> Value {
+	match options {
+		Value::Null => json!({ "target": TEST_TARGET }),
+		Value::Object(m)
+			if !m.contains_key("target")
+				&& !m.contains_key("o7")
+				&& !m.contains_key("o7-language-server") =>
+		{
+			let mut m = m.clone();
+			m.insert("target".to_string(), json!(TEST_TARGET));
+			Value::Object(m)
+		}
+		v => v.clone(),
+	}
+}
+
 pub struct Setup {
 	pub folders: Vec<PathBuf>,
+	/// The initialization options; see [`with_target`].
 	pub options: Value,
 	pub utf8: bool,
 	pub debounce: Duration,
@@ -230,7 +255,7 @@ impl Client {
 		#[allow(deprecated)]
 		let params = InitializeParams {
 			capabilities: caps,
-			initialization_options: Some(setup.options.clone()),
+			initialization_options: Some(with_target(&setup.options)),
 			workspace_folders: Some(
 				setup
 					.folders

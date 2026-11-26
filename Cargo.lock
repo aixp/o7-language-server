@@ -199,12 +199,12 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "o7-front"
-version = "0.7.1"
-source = "git+ssh://git@github.com/aixp/o7c.git?rev=3b041fc3e1e3cfc0c6bd44b258be9637723c6682#3b041fc3e1e3cfc0c6bd44b258be9637723c6682"
+version = "0.8.0"
+source = "git+ssh://git@github.com/aixp/o7c.git?rev=9b760ac3abd4a91e934d567e806bb3382a935ccc#9b760ac3abd4a91e934d567e806bb3382a935ccc"
 
 [[package]]
 name = "o7-language-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "crossbeam-channel",
  "lsp-server",

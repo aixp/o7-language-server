@@ -2,15 +2,29 @@
 //!
 //! # Model
 //!
-//! Each open document is a root module. Its search list is its directory,
-//! then the search paths of the configuration (the rule of the compiler for
-//! a root module). [`Workspace::check_root`] finds the modules of the program
-//! with `project::collect` (the function of the compiler: same naming rule,
-//! same search order, same messages) and analyses each one that is not up to
+//! A module is analysed in a [`Context`]: a target and a search list.
+//! [`Workspace::contexts_of`] gives the contexts of a module:
+//!
+//! - With a project file `o7.toml` (the nearest one upward from the module,
+//!   as the compiler finds it): one context for each program of the module
+//!   (`o7_front::project_file`, "the programs of a module"). A module that
+//!   programs for different targets import has more than one context. The
+//!   first context is the *primary* context: the requests of an editor
+//!   (completion, hover) use it. The diagnostics are those of all contexts.
+//! - Without a project file: the module is a root module. The settings give
+//!   the target; the search list is the directory of the module, then the
+//!   search paths of the settings (the rule of the compiler for a root
+//!   module).
+//!
+//! [`Workspace::check_root`] finds the modules that a module imports with
+//! `project::collect` (the function of the compiler: same naming rule, same
+//! search order, same messages) and analyses each one that is not up to
 //! date, in the order of the imports.
 //!
-//! Results are stored for each file path, not for each module name: two roots
-//! can see different files for one module name.
+//! Results are stored for each target and each file path, not for each
+//! module name: two contexts can see different files for one module name,
+//! and the predeclared names (the procedures of `SYSTEM`, the type `REAL`)
+//! depend on the target.
 //!
 //! # Memo table
 //!
@@ -43,7 +57,7 @@
 //! ([`Workspace::refresh_index`]).
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::SystemTime;
@@ -52,15 +66,67 @@ use o7_front::diag::Diagnostic;
 use o7_front::front::{self, Analysis, ImportLoader};
 use o7_front::hir::TypeId;
 use o7_front::project::{self, SOURCE_EXT, SourceHost};
+use o7_front::project_file::{self, PROJECT_FILE, ProjectFile, Use};
 use o7_front::symfile::SymFile;
+use o7_front::target_info::TargetProps;
 
-use crate::config::Config;
+use crate::config::{Config, no_program_message, no_target_message, project_errors_message};
 use crate::vfs::{Document, LineIndex, normalize};
 
 /// Maximum number of files in the workspace index.
 const MAX_INDEX_FILES: usize = 20_000;
 /// Maximum directory depth of the search for files.
 const MAX_DEPTH: usize = 24;
+
+/// Where a [`Context`] comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Source {
+	/// A program of the project file.
+	Program { name: String, board: &'static str },
+	/// The defaults of the project file: the module is in no program.
+	Default { board: &'static str },
+	/// The settings of the client: there is no project file.
+	Settings,
+}
+
+/// The target and the search list for the analysis of a module and of the
+/// modules that it imports.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Context {
+	pub target: &'static TargetProps,
+	/// The complete search list (the directory of the root module first).
+	pub dirs: Vec<PathBuf>,
+	pub source: Source,
+}
+
+impl Context {
+	/// Two contexts with the same target and the same search list give the
+	/// same analyses.
+	pub fn same_analysis(&self, other: &Context) -> bool {
+		self.target.name == other.target.name && self.dirs == other.dirs
+	}
+
+	/// The context in a message, for example `program rv, board esp32h2`.
+	/// `root` is the root module of a context without a program.
+	pub fn label(&self, root: &Path) -> String {
+		match &self.source {
+			Source::Program { name, board } => format!("program {name}, board {board}"),
+			_ => format!(
+				"root module {}",
+				root.file_name().unwrap_or_default().to_string_lossy()
+			),
+		}
+	}
+}
+
+/// A project file as the workspace read it.
+struct ProjectEntry {
+	text: Rc<[u8]>,
+	parsed: Result<Rc<ProjectFile>, Vec<Diagnostic>>,
+	/// For each program the files of its modules, and the generation of the
+	/// workspace for which they are correct.
+	closures: Option<(u64, Rc<Vec<HashSet<PathBuf>>>)>,
+}
 
 /// One module that the loader gave to an analysis (or refused).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,6 +142,8 @@ pub struct Dep {
 #[derive(Debug)]
 pub struct Unit {
 	pub path: PathBuf,
+	/// The target of the analysis.
+	pub target: &'static TargetProps,
 	/// The module name (from the header).
 	pub name: String,
 	pub src: Rc<[u8]>,
@@ -144,7 +212,10 @@ pub struct Workspace {
 	pub docs: HashMap<PathBuf, Document>,
 	/// The contents of files on the disk.
 	disk: RefCell<HashMap<PathBuf, DiskFile>>,
-	files: HashMap<PathBuf, FileData>,
+	/// The analyses, for each target name and each file.
+	files: HashMap<&'static str, HashMap<PathBuf, FileData>>,
+	/// The project files, for each path.
+	projects: RefCell<HashMap<PathBuf, ProjectEntry>>,
 	/// Number of calls of `analyze_module` (for tests and `o7/status`).
 	pub analyses: usize,
 	/// The files of the workspace index.
@@ -221,7 +292,9 @@ impl Workspace {
 			}
 		}
 		if !exists && !self.docs.contains_key(path) {
-			self.files.remove(path);
+			for files in self.files.values_mut() {
+				files.remove(path);
+			}
 		}
 		self.touch();
 	}
@@ -232,6 +305,7 @@ impl Workspace {
 			self.config = config;
 			self.disk.borrow_mut().clear();
 			self.files.clear();
+			self.projects.borrow_mut().clear();
 			self.touch();
 			self.start_index();
 		}
@@ -239,25 +313,29 @@ impl Workspace {
 
 	// ----- results -----
 
-	/// The last analysis of the file.
-	pub fn unit(&self, path: &Path) -> Option<&Rc<Unit>> {
-		self.files.get(path)?.latest.as_ref()
+	/// The last analysis of the file for the target.
+	pub fn unit(&self, target: &TargetProps, path: &Path) -> Option<&Rc<Unit>> {
+		self.files.get(target.name)?.get(path)?.latest.as_ref()
 	}
 
-	/// The last interface snapshot of the file.
-	pub fn snapshot(&self, path: &Path) -> Option<&Rc<Snapshot>> {
-		self.files.get(path)?.snapshot.as_ref()
+	/// The last interface snapshot of the file for the target.
+	pub fn snapshot(&self, target: &TargetProps, path: &Path) -> Option<&Rc<Snapshot>> {
+		self.files.get(target.name)?.get(path)?.snapshot.as_ref()
 	}
 
-	/// The last analyses of all files.
+	/// The last analyses of all files, for all targets. A file that is
+	/// analysed for two targets is there two times.
 	pub fn units(&self) -> impl Iterator<Item = &Rc<Unit>> {
-		self.files.values().filter_map(|f| f.latest.as_ref())
+		self.files
+			.values()
+			.flat_map(|files| files.values())
+			.filter_map(|f| f.latest.as_ref())
 	}
 
 	// ----- analysis -----
 
-	/// The search list of a root module: its directory, then the search
-	/// paths.
+	/// The search list of a root module without a project file: its
+	/// directory, then the search paths of the settings.
 	pub fn search_dirs(&self, root: &Path) -> Vec<PathBuf> {
 		let mut dirs = vec![root.parent().map(Path::to_path_buf).unwrap_or_default()];
 		for d in self
@@ -271,25 +349,25 @@ impl Workspace {
 		dirs
 	}
 
-	/// Brings the analyses of the program with the root module `root` up to
-	/// date.
-	pub fn check_root(&mut self, root: &Path) -> RootInfo {
-		let dirs = self.search_dirs(root);
-		let (units, problems) = project::collect(&*self, root, &dirs);
+	/// Brings the analyses of the module `root` and of the modules that it
+	/// imports up to date, in the context `ctx`.
+	pub fn check_root(&mut self, ctx: &Context, root: &Path) -> RootInfo {
+		let target = ctx.target;
+		let (units, problems) = project::collect(&*self, root, &ctx.dirs);
 		// The modules before the current one (as the symbol files of the
 		// compiler driver): a module can use only these.
 		let mut available: HashMap<String, PathBuf> = HashMap::new();
 		let mut order = Vec::with_capacity(units.len());
 		for u in units {
 			let path = normalize(&u.path);
-			let fresh = self.unit(&path).is_some_and(|l| {
+			let fresh = self.unit(target, &path).is_some_and(|l| {
 				*l.src == *u.src
 					&& l.deps
 						.iter()
-						.all(|d| self.lookup(&d.name, &available).0 == *d)
+						.all(|d| self.lookup(target, &d.name, &available).0 == *d)
 			});
 			if !fresh {
-				self.analyse(&path, &u.name, Rc::from(u.src), &available);
+				self.analyse(&path, &u.name, Rc::from(u.src), target, &available);
 			}
 			available.insert(u.name, path.clone());
 			order.push(path);
@@ -301,11 +379,14 @@ impl Workspace {
 	/// and the snapshot if the module can be imported.
 	fn lookup(
 		&self,
+		target: &TargetProps,
 		name: &str,
 		available: &HashMap<String, PathBuf>,
 	) -> (Dep, Option<Rc<Snapshot>>) {
 		let path = available.get(name).cloned();
-		let snap = path.as_ref().and_then(|p| self.snapshot(p).cloned());
+		let snap = path
+			.as_ref()
+			.and_then(|p| self.snapshot(target, p).cloned());
 		let dep = Dep {
 			name: name.to_string(),
 			path,
@@ -320,7 +401,7 @@ impl Workspace {
 		snap.symfile.imports.iter().any(|(m, key)| {
 			available
 				.get(m)
-				.and_then(|p| self.snapshot(p))
+				.and_then(|p| self.snapshot(snap.unit.target, p))
 				.is_some_and(|s| s.key != *key)
 		})
 	}
@@ -330,20 +411,23 @@ impl Workspace {
 		path: &Path,
 		name: &str,
 		src: Rc<[u8]>,
+		target: &'static TargetProps,
 		available: &HashMap<String, PathBuf>,
 	) {
 		let file = path.display().to_string();
 		let mut loader = Loader {
 			ws: self,
+			target,
 			available,
 			used: Vec::new(),
 			stale: Vec::new(),
 		};
-		let analysis = front::analyze_module(&src, &file, self.config.target, &mut loader);
+		let analysis = front::analyze_module(&src, &file, target, &mut loader);
 		let Loader { used, stale, .. } = loader;
 		let diags = replace_stale_messages(analysis.diags.list(), &stale);
 		let unit = Rc::new(Unit {
 			path: path.to_path_buf(),
+			target,
 			name: name.to_string(),
 			lines: LineIndex::new(&src),
 			src,
@@ -352,7 +436,8 @@ impl Workspace {
 			diags,
 		});
 		self.analyses += 1;
-		let data = self.files.entry(path.to_path_buf()).or_default();
+		let files = self.files.entry(target.name).or_default();
+		let data = files.entry(path.to_path_buf()).or_default();
 		data.latest = Some(unit.clone());
 		if !unit.has_errors() {
 			// As the compiler driver: importers see what is in the text of the
@@ -424,7 +509,7 @@ impl Workspace {
 			return false;
 		};
 		if self.index_files.contains(&p) {
-			self.check_root(&p);
+			self.check_all(&p);
 		}
 		true
 	}
@@ -446,15 +531,139 @@ impl Workspace {
 			.filter(|p| !self.docs.contains_key(*p))
 			.cloned()
 			.collect();
+		let mut used = HashSet::new();
 		for r in roots {
-			self.check_root(&r);
+			used.extend(self.check_all(&r));
 		}
 		// The open documents last: their own search list decides.
 		let open: Vec<PathBuf> = self.docs.keys().cloned().collect();
-		for r in open {
-			self.check_root(&r);
+		for r in open.iter().filter(|p| !is_project_file(p)) {
+			used.extend(self.check_all(r));
+		}
+		// An analysis that no context uses now (the target of a program
+		// changed, a module is not imported any more) is for an old text.
+		for (target, files) in &mut self.files {
+			files.retain(|path, _| used.contains(&(*target, path.clone())));
 		}
 		self.index_generation = Some(self.generation);
+	}
+
+	/// Brings the analyses of the module `path` up to date in all its
+	/// contexts. The primary context is the last one: if two contexts with
+	/// one target see different files for a module name, the primary
+	/// context decides. The result is the list of the analyses that the
+	/// contexts use: target name and file.
+	pub fn check_all(&mut self, path: &Path) -> Vec<(&'static str, PathBuf)> {
+		let mut used = Vec::new();
+		if let Ok(list) = self.contexts_of(path) {
+			for ctx in list.iter().rev() {
+				let info = self.check_root(ctx, path);
+				used.extend(info.order.into_iter().map(|p| (ctx.target.name, p)));
+			}
+		}
+		used
+	}
+
+	// ----- project files and contexts -----
+
+	/// The project file of the module in the file `path`: the nearest file
+	/// `o7.toml` upward from its directory.
+	pub fn project_file_of(&self, path: &Path) -> Option<PathBuf> {
+		project_file::find(self, path.parent()?)
+	}
+
+	/// Reads the project file `path` (again if its text changed) and gives
+	/// the result of `f` for it.
+	fn with_project<T>(&self, path: &Path, f: impl FnOnce(&mut ProjectEntry) -> T) -> Option<T> {
+		let text = self.text(path)?;
+		let mut projects = self.projects.borrow_mut();
+		let fresh = projects.get(path).is_some_and(|e| *e.text == *text);
+		if !fresh {
+			let parsed = project_file::parse(&text, path).map(Rc::new);
+			let entry = ProjectEntry {
+				text,
+				parsed,
+				closures: None,
+			};
+			projects.insert(path.to_path_buf(), entry);
+		}
+		projects.get_mut(path).map(f)
+	}
+
+	/// The contents of the project file `path`; the error is the list of
+	/// the errors in the file. `None` if the file cannot be read.
+	pub fn project(&self, path: &Path) -> Option<Result<Rc<ProjectFile>, Vec<Diagnostic>>> {
+		self.with_project(path, |e| e.parsed.clone())
+	}
+
+	/// For each program of the project the files of its modules.
+	fn closures(&self, path: &Path, project: &ProjectFile) -> Rc<Vec<HashSet<PathBuf>>> {
+		let cached = self.with_project(path, |e| e.closures.clone()).flatten();
+		if let Some((generation, c)) = cached
+			&& generation == self.generation
+		{
+			return c;
+		}
+		let list: Vec<HashSet<PathBuf>> = project
+			.programs
+			.iter()
+			.map(|p| project_file::closure(self, p).0.into_iter().collect())
+			.collect();
+		let list = Rc::new(list);
+		let generation = self.generation;
+		self.with_project(path, |e| e.closures = Some((generation, list.clone())));
+		list
+	}
+
+	/// The contexts of the module in the file `path` (see the module
+	/// documentation); the first one is the primary context. The error is
+	/// the message for a module that cannot be analysed: there is no
+	/// target for it.
+	pub fn contexts_of(&self, path: &Path) -> Result<Vec<Context>, String> {
+		let Some(file) = self.project_file_of(path) else {
+			let Some(target) = self.config.target else {
+				return Err(no_target_message());
+			};
+			return Ok(vec![Context {
+				target,
+				dirs: self.search_dirs(path),
+				source: Source::Settings,
+			}]);
+		};
+		let project = match self.project(&file) {
+			Some(Ok(p)) => p,
+			_ => return Err(project_errors_message(&file)),
+		};
+		let closures = self.closures(&file, &project);
+		let imports = |p: &project_file::Program| {
+			let i = project.programs.iter().position(|q| std::ptr::eq(p, q));
+			i.is_some_and(|i| closures[i].contains(path))
+		};
+		match project_file::programs_with(&project, path, imports) {
+			Use::Roots(programs) | Use::Importers(programs) => {
+				let mut list: Vec<Context> = Vec::new();
+				for p in programs {
+					let ctx = Context {
+						target: p.context.target,
+						dirs: project_file::search_list(&p.root, &p.context),
+						source: Source::Program {
+							name: p.name.clone(),
+							board: p.context.board,
+						},
+					};
+					if !list.iter().any(|c| c.same_analysis(&ctx)) {
+						list.push(ctx);
+					}
+				}
+				Ok(list)
+			}
+			Use::Default(c) => Ok(vec![Context {
+				target: c.target,
+				dirs: project_file::search_list(path, c),
+				source: Source::Default { board: c.board },
+			}]),
+			Use::None => Err(no_program_message(&file)),
+		}
 	}
 }
 
@@ -477,6 +686,7 @@ impl SourceHost for Workspace {
 /// what it gave.
 struct Loader<'a> {
 	ws: &'a Workspace,
+	target: &'static TargetProps,
 	available: &'a HashMap<String, PathBuf>,
 	used: Vec<Dep>,
 	/// The modules whose snapshot was stale.
@@ -485,7 +695,7 @@ struct Loader<'a> {
 
 impl ImportLoader for Loader<'_> {
 	fn load(&mut self, module: &str) -> Result<Rc<SymFile>, String> {
-		let (dep, snap) = self.ws.lookup(module, self.available);
+		let (dep, snap) = self.ws.lookup(self.target, module, self.available);
 		let known = dep.path.is_some();
 		if !self.used.contains(&dep) {
 			self.used.push(dep);
@@ -493,7 +703,10 @@ impl ImportLoader for Loader<'_> {
 		match snap {
 			Some(s) => {
 				if self.ws.is_stale(&s, self.available)
-					&& self.ws.unit(&s.unit.path).is_some_and(|u| u.has_errors())
+					&& self
+						.ws
+						.unit(self.target, &s.unit.path)
+						.is_some_and(|u| u.has_errors())
 				{
 					self.stale.push(module.to_string());
 				}
@@ -535,6 +748,11 @@ fn replace_stale_messages(list: &[Diagnostic], stale: &[String]) -> Vec<Diagnost
 			d
 		})
 		.collect()
+}
+
+/// `p` is a project file (by its name).
+pub fn is_project_file(p: &Path) -> bool {
+	p.file_name().is_some_and(|n| n == PROJECT_FILE)
 }
 
 fn is_source(p: &Path) -> bool {
@@ -610,20 +828,21 @@ impl ImportLoader for MapLoader<'_> {
 }
 
 impl Workspace {
-	/// Analyses the program with the root module `root` as the compiler
-	/// would compile it after the replacement of the texts `texts`. The
-	/// memo table is not used and not changed. `cache` keeps the results for
-	/// more calls with the same texts. Returns the modules of the program in
-	/// the order of the imports.
+	/// Analyses the module `root` and the modules that it imports in the
+	/// context `ctx`, as the compiler would compile them after the
+	/// replacement of the texts `texts`. The memo table is not used and not
+	/// changed. `cache` keeps the results for more calls with the same texts
+	/// and the same target. Returns the modules in the order of the imports.
 	pub fn analyse_changed(
 		&self,
+		ctx: &Context,
 		root: &Path,
 		texts: &HashMap<PathBuf, Vec<u8>>,
 		cache: &mut HashMap<PathBuf, Rc<ScratchUnit>>,
 	) -> Vec<Rc<ScratchUnit>> {
+		let target = ctx.target;
 		let host = Overlay { ws: self, texts };
-		let dirs = self.search_dirs(root);
-		let (units, _) = project::collect(&host, root, &dirs);
+		let (units, _) = project::collect(&host, root, &ctx.dirs);
 		let mut symfiles: HashMap<String, Rc<SymFile>> = HashMap::new();
 		let mut out = Vec::new();
 		for u in units {
@@ -632,12 +851,8 @@ impl Workspace {
 				Some(su) if su.src == u.src => su.clone(),
 				_ => {
 					let file = path.display().to_string();
-					let analysis = front::analyze_module(
-						&u.src,
-						&file,
-						self.config.target,
-						&mut MapLoader(&symfiles),
-					);
+					let analysis =
+						front::analyze_module(&u.src, &file, target, &mut MapLoader(&symfiles));
 					let (mut type_map, mut symfile) = (Vec::new(), None);
 					if !analysis.diags.has_errors() {
 						let (sf, map) = SymFile::from_module_mapped(&analysis.module);

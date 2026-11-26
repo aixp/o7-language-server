@@ -17,7 +17,7 @@ use o7_front::lexer::KEYWORDS;
 
 use super::{declaration, front_pos, range, references_of, symbol};
 use crate::vfs::{Encoding, path_to_uri};
-use crate::workspace::{ScratchUnit, Unit, Workspace};
+use crate::workspace::{Context, ScratchUnit, Unit, Workspace};
 
 /// Checks that the symbol at the position can be renamed; returns the range
 /// of the identifier and its text.
@@ -54,7 +54,9 @@ fn check_symbol(ws: &Workspace, unit: &Rc<Unit>, sym: u32) -> Result<(Rc<Unit>, 
 	}
 	let (du, id) =
 		declaration(ws, unit, sym).ok_or("the declaration of the symbol is not available")?;
-	let fresh = ws.unit(&du.path).is_some_and(|l| Rc::ptr_eq(l, &du));
+	let fresh = ws
+		.unit(du.target, &du.path)
+		.is_some_and(|l| Rc::ptr_eq(l, &du));
 	if !fresh {
 		return Err(format!(
 			"module {} has errors; the declaration is not in its current text",
@@ -116,6 +118,22 @@ pub fn rename(
 			return Err(format!("{} changed; try again", path.display()));
 		}
 	}
+	// The check of the new texts is for one target. A module of programs
+	// for different targets needs a check for each target: not available.
+	let mut contexts: BTreeMap<PathBuf, Context> = BTreeMap::new();
+	for path in edits.keys() {
+		let mut list = ws.contexts_of(path)?;
+		let mut targets: Vec<&str> = list.iter().map(|c| c.target.name).collect();
+		targets.dedup();
+		if targets.len() > 1 {
+			return Err(format!(
+				"{} is in programs for different targets ({}); a rename in such a module is not available",
+				path.display(),
+				targets.join(", ")
+			));
+		}
+		contexts.insert(path.clone(), list.swap_remove(0));
+	}
 	let delta = new_name.len() as i64 - old_name.len() as i64;
 	let mut texts: HashMap<PathBuf, Vec<u8>> = HashMap::new();
 	for (path, (u, spans)) in &mut edits {
@@ -144,7 +162,7 @@ pub fn rename(
 		.map(|e| e.1.as_slice())
 		.ok_or("internal error: the declaration has no reference")?;
 	let decl_key = (du.path.clone(), shift(decl_spans, decl_start, delta));
-	check(ws, &edits, &texts, delta, &decl_key)?;
+	check(ws, &edits, &contexts, &texts, delta, &decl_key)?;
 
 	let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
 	for (path, (u, spans)) in &edits {
@@ -179,13 +197,19 @@ fn shift(spans: &[Span], p: Pos, delta: i64) -> Pos {
 fn check(
 	ws: &Workspace,
 	edits: &BTreeMap<PathBuf, (Rc<Unit>, Vec<Span>)>,
+	contexts: &BTreeMap<PathBuf, Context>,
 	texts: &HashMap<PathBuf, Vec<u8>>,
 	delta: i64,
 	decl: &(PathBuf, Pos),
 ) -> Result<(), String> {
-	let mut cache = HashMap::new();
+	// One cache for each target.
+	let mut caches: HashMap<&str, HashMap<PathBuf, Rc<ScratchUnit>>> = HashMap::new();
 	for (path, (old, spans)) in edits {
-		let program = ws.analyse_changed(path, texts, &mut cache);
+		let ctx = contexts
+			.get(path)
+			.ok_or_else(|| format!("{} cannot be analysed", path.display()))?;
+		let cache = caches.entry(ctx.target.name).or_default();
+		let program = ws.analyse_changed(ctx, path, texts, cache);
 		let Some(new) = program.iter().find(|u| u.path == *path) else {
 			return Err(format!("{} cannot be analysed", path.display()));
 		};
