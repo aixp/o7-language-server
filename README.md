@@ -238,7 +238,7 @@ minor version.
 The server depends on a fixed commit of the compiler repository:
 
 ```toml
-o7-front = { git = "ssh://git@github.com/aixp/o7c.git", rev = "9b760ac3abd4a91e934d567e806bb3382a935ccc" }
+o7-front = { git = "ssh://git@github.com/aixp/o7c.git", rev = "f6297de0a3125ea66a3c4807224973347f3d6270" }
 ```
 
 `Cargo.lock` is committed, so the build is reproducible. Cargo builds only

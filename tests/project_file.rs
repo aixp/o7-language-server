@@ -328,7 +328,7 @@ fn errors_in_the_project_file() {
 	assert_eq!(
 		texts(&d),
 		[
-			"5:8: unknown board `z80`; the boards are: nucleo-f446re, qemu-stm32f405, qemu-virt-rv32imac, qemu-virt-rv32imafc, esp32h2"
+			"5:8: unknown board `z80`; the boards are: nucleo-f446re, nucleo-f411re, qemu-stm32f405, qemu-virt-rv32imac, qemu-virt-rv32imafc, esp32h2"
 		]
 	);
 	// The range is the string with its quotes.

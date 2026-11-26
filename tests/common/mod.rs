@@ -74,7 +74,8 @@ pub const COMPILER_SETS: [CompilerSet; 3] = [
 			"lib/Micro",
 			"lib/Micro/hsebyp",
 			"examples/nucleo-f446re",
-			"tests/board/nucleo-f446re",
+			"examples/nucleo-f411re",
+			"tests/board/stm32f4",
 		],
 	},
 	CompilerSet {
