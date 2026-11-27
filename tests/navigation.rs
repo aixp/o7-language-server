@@ -316,9 +316,18 @@ fn references_of_out_include_files_that_are_not_open() {
 		eprintln!("skipped: the compiler repository is not available");
 		return;
 	};
+	// The workspace folders are `tests` and `lib`, not the root of the
+	// repository: the index then does not depend on the files that are not
+	// in the repository (for example the output of a build). A relative
+	// search path starts at the first workspace folder, thus the search
+	// paths are absolute.
+	let search: Vec<String> = ["tests/lib/stm32f4", "lib", "lib/Micro", "lib/Micro/hsebyp"]
+		.iter()
+		.map(|d| repo.join(d).display().to_string())
+		.collect();
 	let mut c = Client::start(Setup {
-		folders: vec![repo.clone()],
-		options: json!({ "searchPaths": ["tests/lib/stm32f4", "lib", "lib/Micro", "lib/Micro/hsebyp"] }),
+		folders: vec![repo.join("tests"), repo.join("lib")],
+		options: json!({ "searchPaths": search }),
 		..Setup::default()
 	});
 	let out = repo.join("tests/lib/stm32f4/Out.Mod");

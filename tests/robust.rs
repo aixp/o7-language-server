@@ -142,7 +142,7 @@ fn binary_on_standard_input_and_output() {
 	let out = Command::new(exe).arg("--version").output().unwrap();
 	let v = String::from_utf8(out.stdout).unwrap();
 	assert!(
-		v.starts_with("o7-language-server 0.2.1 (o7-front 0.8.1, compiler commit "),
+		v.starts_with("o7-language-server 0.3.0 (o7-front 0.9.0, compiler commit "),
 		"{v}"
 	);
 

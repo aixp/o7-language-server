@@ -12,8 +12,9 @@ Language server for Oberon-07. It reads and writes the Language Server
 Protocol on the standard input and output.
 
 A project file o7.toml (the nearest one upward from a module; see the
-README of o7c) gives the programs of a project, each with its board and its
-search directories. The server uses it for the target of each module.
+README of o7c) gives the programs of a project, each with the description of
+its MCU (the target, the memory regions) and its search directories. The
+server uses it for the target of each module.
 
 Settings for modules without a project file (initialization options or
 workspace configuration):

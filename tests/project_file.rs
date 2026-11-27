@@ -20,12 +20,24 @@ search = [\"lib\"]
 [[program]]
 name = \"arm\"
 root = \"arm/Main.Mod\"
-board = \"nucleo-f446re\"
+target = \"thumbv7em-m4f\"
+flash = [0x0800_0000, 0x8_0000]
+ram = [0x2000_0000, 0x2_0000]
 
 [[program]]
 name = \"rv\"
 root = \"rv/Main.Mod\"
-board = \"qemu-virt-rv32imac\"
+target = \"rv32imac\"
+flash = [0x8000_0000, 0x8_0000]
+ram = [0x8008_0000, 0x2_0000]
+";
+
+/// The description of an MCU at the top of a project file: the default for
+/// a module that is in no program.
+const DEFAULT_MCU: &str = "\
+target = \"rv32imafc\"
+flash = [0x8000_0000, 0x8_0000]
+ram = [0x8008_0000, 0x2_0000]
 ";
 
 const ARM: &str = "MODULE Main;\n  IMPORT SYSTEM, Shared;\n  VAR a: INTEGER;\nBEGIN\n  a := Shared.Twice(1);\n  SYSTEM.WFE;\n  SYSTEM.\nEND Main.\n";
@@ -140,15 +152,13 @@ fn each_program_has_its_target() {
 		json!({
 			"name": "rv",
 			"root": dir.join("rv/Main.Mod").display().to_string(),
-			"board": "qemu-virt-rv32imac",
 			"target": "rv32imac",
 		})
 	);
 	assert_eq!(
 		s["documents"][1]["contexts"],
 		json!([{
-			"source": "program", "program": "rv",
-			"board": "qemu-virt-rv32imac", "target": "rv32imac",
+			"source": "program", "program": "rv", "target": "rv32imac",
 		}])
 	);
 	c.shutdown();
@@ -167,7 +177,7 @@ fn shared_module_has_the_errors_of_all_its_programs() {
 	let mut c = start(&dir);
 	let u = c.open(&dir.join("lib/Shared.Mod"));
 	let expected = [
-		"2:11: the type REAL is not available on this target (program rv, board qemu-virt-rv32imac)",
+		"2:11: the type REAL is not available on this target (program rv, target rv32imac)",
 		"3:8: `y` is not declared",
 	];
 	assert_eq!(texts(&c.sync(&u)), expected);
@@ -268,7 +278,7 @@ fn module_in_no_program() {
 	// The setting `target` of the client does not apply: the project file
 	// decides.
 	let no_program = format!(
-		"0:0: no target: the module is in no program of {}, and that file has no default board (the key `board` at its top)",
+		"0:0: no target: the module is in no program of {}, and that file has no default MCU (the keys `target`, `flash` and `ram` at its top)",
 		file.display()
 	);
 	assert_eq!(texts(&c.sync(&u)), [no_program.as_str()]);
@@ -285,14 +295,8 @@ fn module_in_no_program() {
 		.expect_err("no target");
 	assert!(e.message.starts_with("no target: "), "{}", e.message);
 
-	// A default board: the module is a root with the defaults of the file.
-	write_files(
-		&dir,
-		&[(
-			"o7.toml",
-			&format!("board = \"qemu-virt-rv32imafc\"\n{PROJECT}"),
-		)],
-	);
+	// A default MCU: the module is a root with the defaults of the file.
+	write_files(&dir, &[("o7.toml", &format!("{DEFAULT_MCU}{PROJECT}"))]);
 	changed(&mut c, &file);
 	c.wait_diags(&u, |d| errors(d).is_empty());
 	let items = complete(&mut c, &u, find(FREE, "SYSTEM.\n", 0, 7));
@@ -301,8 +305,7 @@ fn module_in_no_program() {
 	assert_eq!(
 		c.status()["documents"][0]["contexts"],
 		json!([{
-			"source": "default", "program": null,
-			"board": "qemu-virt-rv32imafc", "target": "rv32imafc",
+			"source": "default", "program": null, "target": "rv32imafc",
 		}])
 	);
 	c.shutdown();
@@ -310,7 +313,7 @@ fn module_in_no_program() {
 
 #[test]
 fn errors_in_the_project_file() {
-	let dir = workspace("project-errors", &PROJECT.replace("nucleo-f446re", "z80"));
+	let dir = workspace("project-errors", &PROJECT.replace("thumbv7em-m4f", "z80"));
 	let file = dir.join("o7.toml");
 	let project = uri(&file);
 	let mut c = start(&dir);
@@ -327,12 +330,10 @@ fn errors_in_the_project_file() {
 	let d = c.last_diags(&project);
 	assert_eq!(
 		texts(&d),
-		[
-			"5:8: unknown board `z80`; the boards are: nucleo-f446re, nucleo-f411re, qemu-stm32f405, qemu-virt-rv32imac, qemu-virt-rv32imafc, esp32h2"
-		]
+		["5:9: unknown target `z80`; the targets are: `thumbv7em-m4f`, `rv32imac`, `rv32imafc`"]
 	);
 	// The range is the string with its quotes.
-	assert_eq!(d[0].range.end, Position::new(5, 13));
+	assert_eq!(d[0].range.end, Position::new(5, 14));
 	assert_eq!(c.status()["projectFiles"][0]["errors"], 1);
 
 	// The file is correct again, but a root module is not a file.
@@ -361,6 +362,40 @@ fn errors_in_the_project_file() {
 }
 
 #[test]
+fn errors_in_the_description_of_the_mcu() {
+	// The rules of the description of the MCU (`o7_front::mcu`) are errors
+	// of the project file: a necessary key that is absent, a value that the
+	// target does not permit.
+	let project = PROJECT
+		.replace("ram = [0x8008_0000, 0x2_0000]\n", "")
+		.replace(
+			"ram = [0x2000_0000, 0x2_0000]\n",
+			"ram = [0x2000_0000, 0x2_0000]\nvectors = 8\n",
+		);
+	let dir = workspace("project-mcu", &project);
+	let file = dir.join("o7.toml");
+	let mut c = start(&dir);
+	let u = c.open(&dir.join("arm/Main.Mod"));
+	assert_eq!(
+		texts(&c.sync(&u)),
+		[format!(
+			"0:0: no target: the project file {} has errors",
+			file.display()
+		)]
+	);
+	let d = c.last_diags(&uri(&file));
+	// `texts` sorts the messages as texts.
+	assert_eq!(
+		texts(&d),
+		[
+			"10:0: the program has no `ram`: give `ram` here or at the top of the file",
+			"2:0: `vectors`: the target thumbv7em-m4f has 16 to 256 entries",
+		]
+	);
+	c.shutdown();
+}
+
+#[test]
 fn settings_without_a_project_file() {
 	// No project file: the settings give the target, as before.
 	let dir = temp_dir("project-none");
@@ -374,14 +409,13 @@ fn settings_without_a_project_file() {
 			"path": dir.join("rv/Main.Mod").display().to_string(),
 			"projectFile": null,
 			"contexts": [{
-				"source": "settings", "program": null, "board": null,
-				"target": "thumbv7em-m4f",
+				"source": "settings", "program": null, "target": "thumbv7em-m4f",
 			}],
 			"problem": null,
 		})
 	);
 	// A project file is created: it replaces the settings.
-	write_files(&dir, &[("o7.toml", "board = \"esp32h2\"\n")]);
+	write_files(&dir, &[("o7.toml", DEFAULT_MCU)]);
 	changed(&mut c, &dir.join("o7.toml"));
 	c.wait_diags(&u, |d| {
 		errors(d) == ["5:2: SYSTEM.WFE is not available on this target"]

@@ -1,6 +1,6 @@
 [package]
 name = "o7-language-server"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -12,9 +12,9 @@ categories = ["development-tools"]
 
 [dependencies]
 # The front end of the compiler. The dependency is a fixed commit (tag
-# o7-front-v0.8.1); Cargo.lock is committed. The repository is private, so
+# o7-front-v0.9.0); Cargo.lock is committed. The repository is private, so
 # the URL is SSH (see README.md, "Front-end version").
-o7-front = { git = "ssh://git@github.com/aixp/o7c.git", rev = "f6297de0a3125ea66a3c4807224973347f3d6270" }
+o7-front = { git = "ssh://git@github.com/aixp/o7c.git", rev = "14aa1e6ecf81f567e47d2bc1c78bfebf6cd2453f" }
 lsp-server = "0.7.9"
 lsp-types = "=0.95.1"
 serde = { version = "1", features = ["derive"] }

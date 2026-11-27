@@ -82,9 +82,9 @@ const MAX_DEPTH: usize = 24;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Source {
 	/// A program of the project file.
-	Program { name: String, board: &'static str },
+	Program { name: String },
 	/// The defaults of the project file: the module is in no program.
-	Default { board: &'static str },
+	Default,
 	/// The settings of the client: there is no project file.
 	Settings,
 }
@@ -106,11 +106,11 @@ impl Context {
 		self.target.name == other.target.name && self.dirs == other.dirs
 	}
 
-	/// The context in a message, for example `program rv, board esp32h2`.
+	/// The context in a message, for example `program rv, target rv32imac`.
 	/// `root` is the root module of a context without a program.
 	pub fn label(&self, root: &Path) -> String {
 		match &self.source {
-			Source::Program { name, board } => format!("program {name}, board {board}"),
+			Source::Program { name } => format!("program {name}, target {}", self.target.name),
 			_ => format!(
 				"root module {}",
 				root.file_name().unwrap_or_default().to_string_lossy()
@@ -644,11 +644,10 @@ impl Workspace {
 				let mut list: Vec<Context> = Vec::new();
 				for p in programs {
 					let ctx = Context {
-						target: p.context.target,
+						target: p.context.mcu.target,
 						dirs: project_file::search_list(&p.root, &p.context),
 						source: Source::Program {
 							name: p.name.clone(),
-							board: p.context.board,
 						},
 					};
 					if !list.iter().any(|c| c.same_analysis(&ctx)) {
@@ -658,9 +657,9 @@ impl Workspace {
 				Ok(list)
 			}
 			Use::Default(c) => Ok(vec![Context {
-				target: c.target,
+				target: c.mcu.target,
 				dirs: project_file::search_list(path, c),
-				source: Source::Default { board: c.board },
+				source: Source::Default,
 			}]),
 			Use::None => Err(no_program_message(&file)),
 		}

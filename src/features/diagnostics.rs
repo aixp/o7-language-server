@@ -11,7 +11,7 @@
 //! for different targets import it. Its diagnostics are those of all its
 //! contexts. A message that all contexts give is shown as it is. A message
 //! that only some contexts give gets the names of these contexts at its end,
-//! for example `(program rv, board esp32h2)`.
+//! for example `(program rv, target rv32imac)`.
 //!
 //! The errors of a project file `o7.toml` are published for that file.
 

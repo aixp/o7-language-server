@@ -15,9 +15,9 @@ fn initialize_gives_the_versions_and_the_capabilities() {
 	let info = c.init.server_info.clone().expect("serverInfo");
 	assert_eq!(info.name, "o7-language-server");
 	let v = info.version.unwrap();
-	assert!(v.contains("o7-front 0.8.1"), "{v}");
+	assert!(v.contains("o7-front 0.9.0"), "{v}");
 	assert!(
-		v.contains("f6297de0a3125ea66a3c4807224973347f3d6270"),
+		v.contains("14aa1e6ecf81f567e47d2bc1c78bfebf6cd2453f"),
 		"{v}"
 	);
 	let caps = &c.init.capabilities;

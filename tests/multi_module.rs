@@ -308,7 +308,7 @@ fn no_target_gives_an_error_and_no_analysis() {
 	let ub = c.open(&dir.join("B.Mod"));
 	let no_target = "0:0: no target: set the setting `target` to one of: \
 		thumbv7em-m4f, rv32imac, rv32imafc; or make a project file o7.toml with the \
-		programs and their boards";
+		programs and their MCUs";
 	assert_eq!(texts(&c.sync(&ub)), [no_target]);
 	assert_eq!(c.analyses(), 0);
 	// A request fails with the same message.

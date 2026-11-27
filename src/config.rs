@@ -11,14 +11,15 @@
 //! The object can also be the value of the key `o7` (the id of the Zed
 //! extension) or `o7-language-server` (the name of the server).
 //!
-//! The target has no default value (as the board of `o7c build`, which has
+//! The target has no default value (as the target of `o7c build`, which has
 //! no default). Without a target the server does not analyse the modules;
 //! each open document has the error [`NO_TARGET`].
 //!
 //! The settings are for a module without a project file. A project file
-//! `o7.toml` (the nearest one upward from the module) gives the board, and
-//! thus the target, and the search directories of each of its programs; the
-//! settings then do not apply to the module (`crate::workspace`).
+//! `o7.toml` (the nearest one upward from the module) gives the description
+//! of the MCU, and thus the target, and the search directories of each of
+//! its programs; the settings then do not apply to the module
+//! (`crate::workspace`).
 
 use std::path::{Path, PathBuf};
 
@@ -37,16 +38,16 @@ pub const NO_TARGET: &str = "no target: set the setting `target`";
 /// The message for a missing target, with the names of the known targets.
 pub fn no_target_message() -> String {
 	format!(
-		"{NO_TARGET} to one of: {}; or make a project file {PROJECT_FILE} with the programs and their boards",
+		"{NO_TARGET} to one of: {}; or make a project file {PROJECT_FILE} with the programs and their MCUs",
 		target_names().join(", ")
 	)
 }
 
 /// The message for a module that is in no program of the project file
-/// `file`, when that file has no default board.
+/// `file`, when that file has no default MCU.
 pub fn no_program_message(file: &Path) -> String {
 	format!(
-		"no target: the module is in no program of {}, and that file has no default board (the key `board` at its top)",
+		"no target: the module is in no program of {}, and that file has no default MCU (the keys `target`, `flash` and `ram` at its top)",
 		file.display()
 	)
 }

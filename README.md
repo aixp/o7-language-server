@@ -10,7 +10,7 @@ semantic index of the front end. The server does not need LLVM.
 | Feature | Notes |
 | ------- | ----- |
 | Diagnostics | For the open documents and the files that they import, and for the project file `o7.toml`. The range is the symbol at the position of the message. All messages are errors (the compiler has no warnings). |
-| Programs for different targets | A project file `o7.toml` gives the board of each program. Each module gets the predeclared names and the procedures of `SYSTEM` of the target of its program. A module of programs for different targets shows the errors of each target. |
+| Programs for different targets | A project file `o7.toml` gives the description of the MCU of each program, with its target. Each module gets the predeclared names and the procedures of `SYSTEM` of the target of its program. A module of programs for different targets shows the errors of each target. |
 | Go to Definition | Also for imported objects, fields of imported records and import names (they go to the module). |
 | Hover | The declaration (`PROCEDURE Add*(VAR list: Node; value: INTEGER): INTEGER`, `CONST Max* = 10`). For an imported procedure the parameter names come from the exporting module. On an expression: its type. |
 | Document Symbols | Module, constants, types with their fields, variables, procedures (nested). |
@@ -53,42 +53,56 @@ The answer to `initialize` has the same version text in `serverInfo`.
 The target of a module (and thus the procedures of `SYSTEM` and the
 predeclared names that it can use) and its search directories come from the
 project file of `o7c`, if there is one. The README of `o7c` describes the
-file. Example:
+file. Each program gives the description of its MCU: the target, the Flash
+and RAM regions, and optional values (`vectors`, `stack`, `exit`, `soc`).
+A key at the top of the file is the default for each program. Example:
 
 ```toml
+target = "thumbv7em-m4f"
+flash = [0x0800_0000, 0x8_0000]
+ram = [0x2000_0000, 0x2_0000]
 search = ["lib", "lib/Micro"]
 
 [[program]]
 name = "demo-f446re"
 root = "examples/nucleo-f446re/Demo.Mod"
-board = "nucleo-f446re"
+vectors = 113
 search = ["lib", "lib/Micro", "lib/Micro/hsebyp"]
 
 [[program]]
 name = "demo-h2"
 root = "examples/esp32h2/Demo.Mod"
-board = "esp32h2"
+target = "rv32imac"
+flash = [0x4080_0000, 0x2_0000]
+ram = [0x4082_0000, 0x1_8000]
+soc = "esp32h2"
 ```
 
+The server uses only the target and the search list of a program. The
+other values of the description of the MCU have no effect on the analysis,
+but the server checks them with the rules of the compiler: an error in them
+is an error of the project file.
+
 The server uses the functions of the compiler (`o7_front::project_file`), so
-it gives each module the board and the search list that `o7c build` gives
+it gives each module the target and the search list that `o7c build` gives
 it:
 
 - The project file of a module is the file `o7.toml` in the nearest
   directory upward from the module. The workspace folder is not important.
 - The programs of a module are the programs that have it as root module. If
   there are none: the programs that import it. For each of these programs
-  the server analyses the module with the target of the board and the search
-  list of the program.
+  the server analyses the module with the target and the search list of the
+  program.
 - A module of programs for different targets has the diagnostics of each
   target. A message that not all its programs give has the names of the
   programs at its end: `the type REAL is not available on this target
-  (program demo-h2, board esp32h2)`. Completion, hover, Go to Definition and
+  (program demo-h2, target rv32imac)`. Completion, hover, Go to Definition and
   the semantic tokens use the first of its programs in the file.
 - A module that is in no program is a root module with the defaults of the
-  file (the keys `board` and `search` at the top). Without a default board
-  the module is not analysed, and it has the error "no target: the module is
-  in no program of ...".
+  file (the description of the MCU and `search` at the top). If the top of
+  the file does not have `target`, `flash` and `ram`, the module is not
+  analysed, and it has the error "no target: the module is in no program of
+  ...".
 - If a module has a project file, the settings `target` and `searchPaths` do
   not apply to it: an editor setting cannot make the server differ from the
   compiler.
@@ -115,7 +129,7 @@ The client gives the settings in the initialization options, in
 | Key | Meaning |
 | --- | ------- |
 | `searchPaths` | The directories for imported modules, in the order of the search. They have the meaning of the `-I` options of `o7c`. A relative path starts at the first workspace folder. Default: none. |
-| `target` | The target of the compiler. The front end needs some of its properties (pointer size, `SYSTEM.REG` for the stack pointer, `SYSTEM.EXCFRAME`, the procedures of `SYSTEM` that the target has and the special registers of `SYSTEM.SREG` and `SYSTEM.LDSREG`, the predeclared procedure `CAS`, the type `REAL`). Values: `thumbv7em-m4f`, `rv32imac` (no `REAL`, `FLT`, `FLOOR`, `SYSTEM.SQRT`), `rv32imafc`. Required: there is no default (as `o7c build`, which requires `--board`). Without a target the server does not analyse the modules, and each open document has the error "no target: set the setting `target` to one of: ...". The value `null` removes the target. |
+| `target` | The target of the compiler. The front end needs some of its properties (pointer size, `SYSTEM.REG` for the stack pointer, `SYSTEM.EXCFRAME`, the procedures of `SYSTEM` that the target has and the special registers of `SYSTEM.SREG` and `SYSTEM.LDSREG`, the predeclared procedure `CAS`, the type `REAL`). Values: `thumbv7em-m4f`, `rv32imac` (no `REAL`, `FLT`, `FLOOR`, `SYSTEM.SQRT`), `rv32imafc`. Required: there is no default (as `o7c build`, which requires `--target`). Without a target the server does not analyse the modules, and each open document has the error "no target: set the setting `target` to one of: ...". The value `null` removes the target. |
 
 The settings object can also be the value of the key `o7-language-server` or
 `o7`. Example for Zed:
@@ -227,18 +241,19 @@ A change of one of these items is a new major version of the server.
 The request `o7/status` (no parameters) gives the state of the server for
 tests and for a client that shows the target of a document: the counters
 `analyses`, `indexFiles`, `indexPending`; `settings`; `projectFiles` (path,
-number of errors, programs with name, root, board and target); `documents`
+number of errors, programs with name, root and target); `documents`
 (for each open document its project file and its contexts: `source` is
-`program`, `default` or `settings`, with `program`, `board` and `target`;
+`program`, `default` or `settings`, with `program` and `target`;
 or the `problem` if the document has no target). New keys can be added in a
-minor version.
+minor version. Version 0.3.0 removed the key `board` (the project file has
+no boards now).
 
 ## Front-end version
 
 The server depends on a fixed commit of the compiler repository:
 
 ```toml
-o7-front = { git = "ssh://git@github.com/aixp/o7c.git", rev = "f6297de0a3125ea66a3c4807224973347f3d6270" }
+o7-front = { git = "ssh://git@github.com/aixp/o7c.git", rev = "14aa1e6ecf81f567e47d2bc1c78bfebf6cd2453f" }
 ```
 
 `Cargo.lock` is committed, so the build is reproducible. Cargo builds only
@@ -279,8 +294,9 @@ The tests run the server in the same process on a connection in memory:
 | `tests/diagnostics.rs` | Initialization, diagnostics of one module, small edits against the final text, CRLF and UTF-8 positions, byte order mark, speed (MicroSTM32F4.Mod: less than 10 ms after the pause). |
 | `tests/multi_module.rs` | Interface change in an open buffer, no analysis of importers after a body change (counter), missing import, circular import, wrong module name, module with errors, stale interface, changed search paths, no target. |
 | `tests/differential.rs` | For each module of the compiler repository: the diagnostics of the server are equal to those of `front::parse_module`. |
-| `tests/navigation.rs` | Definition, hover, document symbols, references (also of `tests/lib/Out.Mod` in files that are not open), workspace symbols. |
+| `tests/navigation.rs` | Definition, hover, document symbols, references (also in files that are not open), workspace symbols. |
 | `tests/editing.rs` | Completion, rename (with the refusals), semantic tokens (one token for each identifier of each correct file of the compiler repository). |
+| `tests/project_file.rs` | The project file: a target for each program, a module of programs for different targets (diagnostics, references, rename), a module in no program, errors of the project file and of the description of the MCU, the settings without a project file. |
 | `tests/robust.rs` | All requests on cut texts; the binary on the standard input and output. |
 
 Some tests need the compiler repository. They look for it in the sibling

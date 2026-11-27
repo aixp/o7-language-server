@@ -75,10 +75,10 @@ const STACK_SIZE: usize = 512 << 20;
 /// - `settings`: the settings `target` and `searchPaths`;
 /// - `projectFiles`: the project files of the open documents, each with its
 ///   `path`, the number of its `errors` and its `programs` (`name`, `root`,
-///   `board`, `target`);
+///   `target`);
 /// - `documents`: the open documents, each with its `path`, its
 ///   `projectFile`, its `contexts` (`source`: `program`, `default` or
-///   `settings`; `program`, `board`, `target`; the first one is the primary
+///   `settings`; `program`, `target`; the first one is the primary
 ///   context) and the `problem` if it has no context.
 pub const STATUS_REQUEST: &str = "o7/status";
 
@@ -575,15 +575,14 @@ impl<'a> Server<'a> {
 	fn status(&self) -> Value {
 		let text = |p: &std::path::Path| p.display().to_string();
 		let context = |c: &Context| {
-			let (source, program, board) = match &c.source {
-				Source::Program { name, board } => ("program", Some(name.as_str()), Some(*board)),
-				Source::Default { board } => ("default", None, Some(*board)),
-				Source::Settings => ("settings", None, None),
+			let (source, program) = match &c.source {
+				Source::Program { name } => ("program", Some(name.as_str())),
+				Source::Default => ("default", None),
+				Source::Settings => ("settings", None),
 			};
 			json!({
 				"source": source,
 				"program": program,
-				"board": board,
 				"target": c.target.name,
 			})
 		};
@@ -617,8 +616,7 @@ impl<'a> Server<'a> {
 								json!({
 									"name": p.name,
 									"root": text(&p.root),
-									"board": p.context.board,
-									"target": p.context.target.name,
+									"target": p.context.mcu.target.name,
 								})
 							})
 							.collect(),
